@@ -88,6 +88,12 @@ Googleアカウントへのログインは利用者から完了報告あり。Ar
 
 ## ローカル検証
 
+0.3.1 (2026-10-21): iPhone/iPadのホーム画面PWAで、次の矢印をすぐタップするとブラウザーが拡大するという利用者報告への対策。CSSのtouch-action指定に加えて、盤面SVGのtouchstart/move/endとdblclickの既定動作を非passiveリスナーで抑止する。ゲーム入力は従来のPointer Eventsだけを使い、連続入力の間引きや待ち時間は設けない。ページ全体のuser-scalable/maximum-scale制限は追加しない。
+
+WebKitには[touch-actionでダブルタップ拡大を抑止できない報告](https://bugs.webkit.org/show_bug.cgi?id=218015)があり、[Touch Events仕様](https://www.w3.org/TR/touch-events/#the-touchstart-event)の既定動作キャンセルを盤面内に補完した。ただし、その既知事例が利用者の端末で起きた現象の原因と実証したわけではない。
+
+Node72成功・Emulator専用1skip。ローカルChromeでブラウザー15試験成功。390×844、isMobile/hasTouchの試験で40px以内の2本を300ms以内に実タッチ入力し、2本の保存、visualViewport.scaleの不変、既定動作の抑止を確認。CDPの2本指入力で盤面だけのピンチ、1本指ドラッグ、拡大/全体表示ボタン、ミス0を確認した。時間差の明示的な検証を追加した後も対象試験1件成功。Browser skillは一覧にないため既存Playwrightを使用。Windows Chromeのタッチ試験はiOS/WebKitのホーム画面PWA実機での実証と区別する。公開後に利用者端末での確認が残る。
+
 0.3.0: 全難易度で20/24/28/32角を生成し、同じサイズ内の候補数と依存深さで難易度を分離。GAS公開schemaは2、profileは3.0.0、sizesを追加した。表示はライト/ダーク/端末連動、矢印は4色。colorModeを含む7項目設定に対応し、旧5/6項目は読み出し値だけ補完する。元の途中盤面、revision、設定時刻を維持する。旧0.2.xのJSは新しいキーを拒否するため、新版で7項目を保存・同期した後は旧タブも「更新」または再読込する。保存データを初期化しない。
 
 消去済みセルの中心に薄いドットを描画。再開、パン・ズーム、明暗切替に追従する。PC盤面は線上・セル角・ドラッグ中をpointerで統一。保存中のタップも所有者・世代・プレイID付きのFIFOで保持し、次の矢印の操作を落とさない。画面やアカウントが変わった入力は適用しない。

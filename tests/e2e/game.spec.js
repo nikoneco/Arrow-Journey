@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { getRemovable, canRemove, solveBoard } from "../../js/engine.js";
 import { mkdir } from "node:fs/promises";
 const evidence =
-  "C:/Users/aqua_/.codex/visualizations/2026/10/20/01a15956-6698-7a93-94ae-729f1decee32";
+  "C:/Users/aqua_/Documents/Codex/2026-10-21/Arrow-Journey-0.3.1";
 async function readProfile(page) {
   return page.evaluate(
     () =>
@@ -605,4 +605,164 @@ test("taps received while a view save is blocked are processed after that save",
   expect(saved.remainingIds).not.toContain(ids[0]);
   expect(saved.remainingIds).not.toContain(ids[1]);
   expect(saved.misses).toBe(0);
+});
+
+test("rapid nearby touch taps suppress browser zoom while board pinch and controls still work", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    baseURL: test.info().project.use.baseURL,
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 2,
+    hasTouch: true,
+    isMobile: true,
+  });
+  try {
+    const page = await context.newPage(),
+      errors = [];
+    page.on("pageerror", (e) => errors.push(e.message));
+    await page.goto("/");
+    await start(page);
+    const game = (await readProfile(page)).activeGame;
+    const svg = page.locator("#board svg"),
+      rect = await svg.boundingBox();
+    const scene = page.locator("#board svg > g");
+    const transform = await scene.getAttribute("transform");
+    const scale = await page.evaluate(() => visualViewport.scale);
+    const point = ([x, y]) => ({
+      x: rect.x + ((x + 0.5) * rect.width) / game.board.width,
+      y: rect.y + ((y + 0.5) * rect.height) / game.board.height,
+    });
+    const free = game.board.arrows.filter((a) =>
+      getRemovable(game.board, game.remainingIds).includes(a.id),
+    );
+    let nearest;
+    for (let i = 0; i < free.length; i++)
+      for (let j = i + 1; j < free.length; j++) {
+        for (const a of free[i].cells)
+          for (const b of free[j].cells) {
+            const first = point(a),
+              second = point(b),
+              distance = Math.hypot(first.x - second.x, first.y - second.y);
+            if (!nearest || distance < nearest.distance)
+              nearest = {
+                first,
+                second,
+                distance,
+                ids: [free[i].id, free[j].id],
+              };
+          }
+      }
+    expect(nearest.distance).toBeLessThan(40);
+    await page.evaluate(() => {
+      window.qaTouchStarts = [];
+      window.qaTouchTimes = [];
+      document.addEventListener(
+        "touchstart",
+        (event) => {
+          window.qaTouchTimes.push(event.timeStamp);
+          window.qaTouchStarts.push({
+            prevented: event.defaultPrevented,
+            board: Boolean(event.target.closest?.("#board")),
+            trusted: event.isTrusted,
+          });
+        },
+        { passive: true },
+      );
+    });
+    await page.touchscreen.tap(nearest.first.x, nearest.first.y);
+    await page.touchscreen.tap(nearest.second.x, nearest.second.y);
+    await expect(page.locator("#remaining")).toHaveText(
+      String(game.remainingIds.length - 2),
+    );
+    const saved = (await readProfile(page)).activeGame;
+    expect(nearest.ids.every((id) => !saved.remainingIds.includes(id))).toBe(
+      true,
+    );
+    await expect(scene).toHaveAttribute("transform", transform);
+    expect(await page.evaluate(() => visualViewport.scale)).toBe(scale);
+    const times = await page.evaluate(() => window.qaTouchTimes);
+    expect(times[1] - times[0]).toBeLessThan(300);
+    expect(await page.evaluate(() => window.qaTouchStarts)).toEqual([
+      { prevented: true, board: true, trusted: true },
+      { prevented: true, board: true, trusted: true },
+    ]);
+    await expect(page.locator("html")).toHaveCSS(
+      "touch-action",
+      "manipulation",
+    );
+    await expect(page.locator(".game-frame")).toHaveCSS("touch-action", "none");
+    await expect(page.locator("#board")).toHaveCSS("touch-action", "none");
+    const defaults = await page.evaluate(() => {
+      const board = document.querySelector("#board svg"),
+        control = document.querySelector('[data-action="zoomIn"]');
+      const dbl = new MouseEvent("dblclick", {
+        bubbles: true,
+        cancelable: true,
+      });
+      board.dispatchEvent(dbl);
+      const touch = new TouchEvent("touchstart", {
+        bubbles: true,
+        cancelable: true,
+      });
+      control.dispatchEvent(touch);
+      return {
+        doubleClickPrevented: dbl.defaultPrevented,
+        controlTouchPrevented: touch.defaultPrevented,
+        viewport: document.querySelector('meta[name="viewport"]').content,
+      };
+    });
+    expect(defaults.doubleClickPrevented).toBe(true);
+    expect(defaults.controlTouchPrevented).toBe(false);
+    expect(defaults.viewport).not.toMatch(/user-scalable|maximum-scale/);
+    const cdp = await context.newCDPSession(page);
+    const cx = rect.x + rect.width / 2,
+      cy = rect.y + rect.height / 2;
+    const fingers = (offset) => [
+      { x: cx - offset, y: cy, id: 11 },
+      { x: cx + offset, y: cy, id: 12 },
+    ];
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: fingers(30),
+    });
+    for (const offset of [38, 46, 54, 60])
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: fingers(offset),
+      });
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+    });
+    await expect(scene).toHaveAttribute("transform", /scale\(2\)/);
+    expect(await page.evaluate(() => visualViewport.scale)).toBe(scale);
+    await expect(page.locator("#remaining")).toHaveText(
+      String(game.remainingIds.length - 2),
+    );
+    const pinched = await scene.getAttribute("transform");
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x: cx, y: cy, id: 13 }],
+    });
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: cx + 25, y: cy + 25, id: 13 }],
+    });
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+    });
+    await expect(scene).not.toHaveAttribute("transform", pinched);
+    await expect(page.locator("#misses")).toHaveText("0");
+    await page.getByRole("button", { name: "盤面を全体表示" }).tap();
+    await expect(scene).toHaveAttribute("transform", transform);
+    await page.getByRole("button", { name: "拡大", exact: true }).tap();
+    await expect(scene).toHaveAttribute("transform", /scale\(1\.3\)/);
+    await mkdir(evidence, { recursive: true });
+    await page.screenshot({ path: evidence + "/rapid-touch-and-pinch.png" });
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
 });

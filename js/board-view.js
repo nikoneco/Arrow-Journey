@@ -145,6 +145,18 @@ export class BoardView {
     this.svg.append(defs, this.scene);
     container.append(this.svg);
 
+    // Some iOS versions still zoom after rapid taps despite touch-action.
+    // Cancel only the browser gesture; Pointer Events handle every game tap
+    // and our two-finger pinch, without a double-tap debounce or second input path.
+    for (const type of ["touchstart", "touchmove", "touchend", "dblclick"])
+      this.listen(
+        type,
+        (event) => {
+          if (event.cancelable) event.preventDefault();
+        },
+        { passive: false },
+      );
+
     this.listen("pointerdown", (event) => this.pointerDown(event));
     this.listen("pointermove", (event) => this.pointerMove(event));
     this.listen("pointerup", (event) => this.pointerEnd(event, false));
