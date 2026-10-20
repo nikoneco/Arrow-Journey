@@ -1,7 +1,7 @@
 import { sampleArrow } from "./engine.js";
+import { ARROW_THEMES } from "./themes.js";
 
 const NS = "http://www.w3.org/2000/svg";
-const INK = "#293f37";
 const GOLD = "#b78b3e";
 const RUST = "#a46b51";
 let nextClip = 0;
@@ -13,10 +13,43 @@ function svgElement(name, attributes = {}) {
   return element;
 }
 
-function pathData(points) {
-  return points
-    .map(([x, y], index) => `${index ? "L" : "M"}${x + 0.5},${y + 0.5}`)
-    .join(" ");
+export function pathData(points) {
+  const vertices = points.filter(
+    (point, index) =>
+      !index ||
+      point[0] !== points[index - 1][0] ||
+      point[1] !== points[index - 1][1],
+  );
+  if (!vertices.length) return "";
+  const coordinate = ([x, y]) => `${x + 0.5},${y + 0.5}`;
+  const commands = [`M${coordinate(vertices[0])}`];
+  for (let index = 1; index < vertices.length - 1; index += 1) {
+    const previous = vertices[index - 1],
+      corner = vertices[index],
+      next = vertices[index + 1];
+    const incoming = [corner[0] - previous[0], corner[1] - previous[1]];
+    const outgoing = [next[0] - corner[0], next[1] - corner[1]];
+    const before = Math.hypot(...incoming),
+      after = Math.hypot(...outgoing);
+    const cross = incoming[0] * outgoing[1] - incoming[1] * outgoing[0];
+    if (Math.abs(cross) <= before * after * 1e-10) {
+      commands.push(`L${coordinate(corner)}`);
+      continue;
+    }
+    // Half-length limits keep neighboring bends and fractional moving tails apart.
+    const radius = Math.min(0.25, before / 2, after / 2);
+    const entry = corner.map(
+      (value, axis) => value - (incoming[axis] / before) * radius,
+    );
+    const exit = corner.map(
+      (value, axis) => value + (outgoing[axis] / after) * radius,
+    );
+    commands.push(
+      `L${coordinate(entry)} Q${coordinate(corner)} ${coordinate(exit)}`,
+    );
+  }
+  if (vertices.length > 1) commands.push(`L${coordinate(vertices.at(-1))}`);
+  return commands.join(" ");
 }
 
 function headData(points) {
@@ -53,6 +86,8 @@ export class BoardView {
     this.dragging = false;
     this.pinch = null;
     this.listeners = [];
+    this.themeId = "forest";
+    this.ink = ARROW_THEMES.find((theme) => theme.id === "forest").ink;
 
     this.svg = svgElement("svg", {
       class: "board-svg",
@@ -80,6 +115,7 @@ export class BoardView {
     this.clipped = svgElement("g", { "clip-path": `url(#${this.clipId})` });
     this.staticLayer = svgElement("g");
     this.ghostLayer = svgElement("g", {
+      class: "arrow-ghosts",
       "aria-hidden": "true",
       "pointer-events": "none",
     });
@@ -179,9 +215,10 @@ export class BoardView {
   }
 
   makeArrow(arrow, interactive = false) {
+    const bodyPath = pathData(arrow.cells);
     const group = svgElement("g", {
       fill: "none",
-      stroke: INK,
+      stroke: this.ink,
       "stroke-width": 0.13,
       "stroke-linecap": "round",
       "stroke-linejoin": "round",
@@ -207,14 +244,14 @@ export class BoardView {
     }
     const outline = svgElement("path", {
       class: "arrow-outline",
-      d: pathData(arrow.cells),
+      d: bodyPath,
       stroke: GOLD,
       "stroke-width": 0.28,
       opacity: 0,
     });
     const body = svgElement("path", {
       class: "arrow-body",
-      d: pathData(arrow.cells),
+      d: bodyPath,
     });
     const head = svgElement("path", {
       class: "arrow-head",
@@ -222,7 +259,7 @@ export class BoardView {
     });
     const focus = svgElement("path", {
       class: "arrow-focus",
-      d: pathData(arrow.cells),
+      d: bodyPath,
       stroke: "#718b78",
       "stroke-width": 0.34,
       opacity: 0,
@@ -238,13 +275,29 @@ export class BoardView {
     this.updateHints();
   }
 
+  setTheme(themeId) {
+    if (this.destroyed) return;
+    const theme =
+      ARROW_THEMES.find((candidate) => candidate.id === themeId) ||
+      ARROW_THEMES.find((candidate) => candidate.id === "forest");
+    this.themeId = theme.id;
+    this.ink = theme.ink;
+    this.updateHints();
+    for (const { group } of this.ghosts.values())
+      group.setAttribute("stroke", this.ink);
+  }
+
   updateHints() {
     for (const [id, group] of this.groups) {
       const hinted = id === this.hintId;
       group
         .querySelector(".arrow-outline")
         .setAttribute("opacity", hinted ? "0.9" : "0");
-      group.setAttribute("stroke", hinted ? "#203f32" : INK);
+      const blocked = this.feedback.get(id);
+      group.setAttribute(
+        "stroke",
+        blocked && blocked.progress < 0.8 ? RUST : this.ink,
+      );
       group.setAttribute("stroke-width", hinted ? "0.16" : "0.13");
       if (hinted) group.setAttribute("aria-description", "ヒントの矢印");
       else group.removeAttribute("aria-description");
@@ -258,15 +311,13 @@ export class BoardView {
     const prior = this.feedback.get(key);
     if (prior) cancelAnimationFrame(prior.frame);
     let started;
-    const feedback = { frame: 0 };
+    const feedback = { frame: 0, progress: 0 };
     this.feedback.set(key, feedback);
     const tick = (time) => {
       if (started === undefined) started = time;
       const progress = Math.min(1, (time - started) / 460);
-      group.setAttribute(
-        "stroke",
-        progress < 0.8 ? RUST : key === this.hintId ? "#203f32" : INK,
-      );
+      feedback.progress = progress;
+      group.setAttribute("stroke", progress < 0.8 ? RUST : this.ink);
       const offset = this.reducedMotion
         ? 0
         : Math.sin(progress * Math.PI * 6) * 0.085 * (1 - progress);
@@ -318,7 +369,11 @@ export class BoardView {
       // Sampling Q([s, L+s]) preserves every bend until the tail reaches it.
       const distance = travel * progress * progress * (3 - 2 * progress);
       const points = sampleArrow(arrow, distance);
-      group.querySelector(".arrow-body").setAttribute("d", pathData(points));
+      const bodyPath = pathData(points);
+      for (const path of group.querySelectorAll(
+        ".arrow-body, .arrow-outline, .arrow-focus",
+      ))
+        path.setAttribute("d", bodyPath);
       group.querySelector(".arrow-head").setAttribute("d", headData(points));
       if (progress < 1) animation.frame = requestAnimationFrame(tick);
       else {
@@ -329,6 +384,12 @@ export class BoardView {
     };
     animation.frame = requestAnimationFrame(tick);
     return promise;
+  }
+
+  whenIdle() {
+    return Promise.all(
+      Array.from(this.ghosts.values(), ({ promise }) => promise),
+    );
   }
 
   localPoint(clientX, clientY) {

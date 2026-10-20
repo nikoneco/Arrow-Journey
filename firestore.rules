@@ -27,11 +27,24 @@ service cloud.firestore {
     }
     function settings(d) {
       return d.keys().hasAll(['bgmEnabled','sfxEnabled','bgmVolume','sfxVolume','reducedMotion'])
-        && d.keys().hasOnly(['bgmEnabled','sfxEnabled','bgmVolume','sfxVolume','reducedMotion'])
+        && d.keys().hasOnly(['bgmEnabled','sfxEnabled','bgmVolume','sfxVolume','reducedMotion','arrowTheme'])
         && setting(d.bgmEnabled,false) && setting(d.sfxEnabled,false)
-        && setting(d.bgmVolume,true) && setting(d.sfxVolume,true) && setting(d.reducedMotion,false);
+        && setting(d.bgmVolume,true) && setting(d.sfxVolume,true) && setting(d.reducedMotion,false)
+        && (!d.keys().hasAny(['arrowTheme']) || themeSetting(d.arrowTheme));
+    }
+    function themeSetting(v) {
+      return v is map && v.keys().hasAll(['value','updatedAt','deviceId'])
+        && v.keys().hasOnly(['value','updatedAt','deviceId'])
+        && stamp(v.updatedAt) && identifier(v.deviceId)
+        && v.value is string && v.value in ['forest','ocean','grape','ember'];
     }
     function newer(a,b) { return a == b || a.updatedAt > b.updatedAt || (a.updatedAt == b.updatedAt && a.deviceId > b.deviceId); }
+    function themePreserved(next,old) {
+      // Legacy five-field writes are valid until a theme exists; patches preserve it.
+      // A legacy full replacement must never erase an already chosen theme.
+      return !old.keys().hasAny(['arrowTheme'])
+        || (next.keys().hasAny(['arrowTheme']) && newer(next.arrowTheme,old.arrowTheme));
+    }
     match /users/{uid}/playSummaries/{playId} {
       allow read: if mine(uid);
       allow create: if mine(uid) && summary(request.resource.data,playId);
@@ -54,7 +67,8 @@ service cloud.firestore {
         && newer(request.resource.data.sfxEnabled,resource.data.sfxEnabled)
         && newer(request.resource.data.bgmVolume,resource.data.bgmVolume)
         && newer(request.resource.data.sfxVolume,resource.data.sfxVolume)
-        && newer(request.resource.data.reducedMotion,resource.data.reducedMotion);
+        && newer(request.resource.data.reducedMotion,resource.data.reducedMotion)
+        && themePreserved(request.resource.data,resource.data);
     }
     match /{document=**} { allow read, write: if false; }
   }

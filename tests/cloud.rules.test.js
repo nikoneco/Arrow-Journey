@@ -1,7 +1,8 @@
 import test from 'node:test';
+import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { createProfile } from '../js/storage.js';
+import { createProfile, updateSettings } from '../js/storage.js';
 import { initializeCloud } from '../js/cloud.js';
 
 test('Firestore UID boundaries, field allowlists and immutable/monotonic records', { skip: !process.env.FIRESTORE_EMULATOR_HOST && 'isolated Firestore emulator required' }, async(t)=>{
@@ -49,19 +50,48 @@ test('Firestore UID boundaries, field allowlists and immutable/monotonic records
       await assertFails(r.update({bgmVolume:{value:0.2,updatedAt:100,deviceId:'device-a'}}));
       await assertFails(r.delete());
     });
-    await t.test('actual modular SDK adapter transactions replay safely under these rules',async()=>{
+    await t.test('legacy five-setting writes remain valid; theme cannot be erased, invalid or regressed',async()=>{
+      const db=env.authenticatedContext('legacy').firestore(),r=db.doc('users/legacy/preferences/app');
+      const legacy=createProfile('uid:legacy').settings;delete legacy.arrowTheme;
+      await assertSucceeds(r.set(legacy));
+      legacy.bgmEnabled={value:false,updatedAt:20,deviceId:'old-device'};
+      await assertSucceeds(r.set(legacy));
+      for(const value of ['unknown',true,'#293f37',null])await assertFails(r.update({arrowTheme:{value,updatedAt:100,deviceId:'new-device'}}));
+      await assertFails(r.update({arrowTheme:{value:'forest',updatedAt:100,deviceId:'new-device',css:'red'}}));
+      await assertSucceeds(r.update({arrowTheme:{value:'ocean',updatedAt:100,deviceId:'new-device'}}));
+      await assertFails(r.set(legacy));
+      const patch={...legacy,sfxVolume:{value:0.3,updatedAt:30,deviceId:'old-device'}};
+      await assertSucceeds(r.update(patch));
+      assert.equal((await r.get()).data().arrowTheme.value,'ocean');
+      await assertFails(r.update({arrowTheme:{value:'forest',updatedAt:99,deviceId:'z-device'}}));
+      await assertFails(r.update({arrowTheme:{value:'forest',updatedAt:100,deviceId:'a-device'}}));
+      let stamp=101;for(const value of ['forest','grape','ember'])await assertSucceeds(r.update({arrowTheme:{value,updatedAt:stamp++,deviceId:'new-device'}}));
+      await assertFails(r.update({arrowTheme:{value:'ocean',updatedAt:101,deviceId:'z-device'}}));
+    });
+    await t.test('actual modular SDK imports old cloud, adds theme and replays under these rules',async()=>{
       const appSdk=await import('firebase/app'),firestoreSdk=await import('firebase/firestore');
+      const uid='sdk-legacy',owner='uid:'+uid,legacyDb=env.authenticatedContext(uid).firestore(),legacyRef=legacyDb.doc(`users/${uid}/preferences/app`);
+      const oldSettings=createProfile(owner).settings;delete oldSettings.arrowTheme;
+      oldSettings.bgmVolume={value:0.8,updatedAt:50,deviceId:'old-device'};
+      await legacyRef.set(oldSettings);
       let firebaseApp,firestore;
-      const sdk={...appSdk,...firestoreSdk,initializeApp:(...args)=>{firebaseApp=appSdk.initializeApp(...args);return firebaseApp;},getAuth:()=>({currentUser:{uid:'alice'}}),onAuthStateChanged:(_,fn)=>{fn({uid:'alice'});return()=>{};},getFirestore:(app)=>{firestore=firestoreSdk.getFirestore(app);firestoreSdk.connectFirestoreEmulator(firestore,host,Number(port),{mockUserToken:{sub:'alice',user_id:'alice'}});return firestore;}};
+      const sdk={...appSdk,...firestoreSdk,initializeApp:(...args)=>{firebaseApp=appSdk.initializeApp(...args);return firebaseApp;},getAuth:()=>({currentUser:{uid}}),onAuthStateChanged:(_,fn)=>{fn({uid});return()=>{};},getFirestore:(app)=>{firestore=firestoreSdk.getFirestore(app);firestoreSdk.connectFirestoreEmulator(firestore,host,Number(port),{mockUserToken:{sub:uid,user_id:uid}});return firestore;}};
       const cloud=await initializeCloud({apiKey:'demo-key',projectId:'demo-arrow-journey',appId:'demo-app',authDomain:'example.test'},{},sdk);
       try {
-        const p=createProfile('uid:alice');
+        const p=createProfile(owner);delete p.settings.arrowTheme;
         p.summaries['tx-play']={playId:'tx-play',difficulty:'easy',misses:5,hintsUsed:1};
         p.clears['tx-fp']={boardFingerprint:'tx-fp',playId:'tx-play',difficulty:'easy',misses:5,hintsUsed:1,completedAt:100};
         p.activeGame={playId:'tx-play',board:{seed:'private'},remainingIds:['a'],misses:5,hintsUsed:1,hintId:null,hintRevision:null,boardRevision:0,startedAt:100};
-        const first=await cloud.sync('uid:alice',p),second=await cloud.sync('uid:alice',first);
-        if(JSON.stringify(first)!==JSON.stringify(second))throw new Error('Replay changed profile');
-        const record=(await ref(alice,'playSummaries/tx-play').get()).data();
+        const first=await cloud.sync(owner,p),second=await cloud.sync(owner,first);
+        assert.deepEqual(first,second);
+        assert.equal(first.settings.arrowTheme.value,'forest');assert.deepEqual(first.settings.bgmVolume,oldSettings.bgmVolume);
+        const remote=(await legacyRef.get()).data();assert.equal(remote.arrowTheme.value,'forest');
+        const themed=await cloud.sync(owner,updateSettings(first,{arrowTheme:'ember'},'new-device',100));
+        assert.equal(themed.settings.arrowTheme.value,'ember');
+        await legacyRef.update({sfxEnabled:{value:false,updatedAt:200,deviceId:'old-device'}});
+        const patched=await cloud.sync(owner,themed);
+        assert.equal(patched.settings.arrowTheme.value,'ember');assert.equal(patched.settings.sfxEnabled.value,false);
+        const record=(await legacyDb.doc(`users/${uid}/playSummaries/tx-play`).get()).data();
         if(Object.keys(record).sort().join(',')!=='difficulty,hintsUsed,misses,playId')throw new Error('Unexpected uploaded fields');
       } finally {cloud.dispose();await firestoreSdk.terminate(firestore);await appSdk.deleteApp(firebaseApp);}
     });

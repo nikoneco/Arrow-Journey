@@ -17,7 +17,7 @@ profile = await store.write('guest', nextProfile, profile.revision);
 
 プロファイル形式は `schemaVersion, ownerKey, revision, activeGame, summaries, clears, settings`。summaryはplayIdキーで `{playId,difficulty,misses,hintsUsed}`。clearは盤面fingerprintキーで `{boardFingerprint,playId,difficulty,misses,hintsUsed,completedAt}`。ミスとヒントの保存済み値は減少させない。集計値を保存・加算する代わりに、`aggregateStats`が重複のない記録から算出する。
 
-設定項目は `bgmEnabled,sfxEnabled,bgmVolume,sfxVolume,reducedMotion`。`updateSettings(profile,patch,deviceId,now)`を使い、各項目を `{value,updatedAt,deviceId}` として記録する。今回の実装では項目ごとの更新時刻、同時刻ならdeviceIdの辞書順で統合する。仕様書の提案「クラウドの確定順」とは異なる実装定義であり、端末時計のずれが同項目の競合へ影響する。設定を再操作すると、既知の最大時刻より新しい時刻を割り当てる。
+設定項目は `bgmEnabled,sfxEnabled,bgmVolume,sfxVolume,reducedMotion,arrowTheme`。`updateSettings(profile,patch,deviceId,now)`を使い、各項目を `{value,updatedAt,deviceId}` として記録する。今回の実装では項目ごとの更新時刻、同時刻ならdeviceIdの辞書順で統合する。仕様書の提案「クラウドの確定順」とは異なる実装定義であり、端末時計のずれが同項目の競合へ影響する。設定を再操作すると、既知の最大時刻より新しい時刻を割り当てる。
 
 ## 任意のGoogle連携
 
@@ -42,7 +42,7 @@ Firestoreの領域:
 
 - `users/{uid}/playSummaries/{playId}`：単調増加するミス・ヒント要約。
 - `users/{uid}/clears/{boardFingerprint}`：作成後不変のクリア記録。
-- `users/{uid}/preferences/app`：許可された5項目の設定。
+- `users/{uid}/preferences/app`：許可された6項目の設定（旧5項目も読取互換）。
 
 `firestore.rules`は本人UIDだけを許可し、不明領域・余分なフィールド・不正値・削除を拒否する。公開前に対象のArrow Journey用プロジェクトを確定し、このルールをFirestoreへ反映して、本人・別UID・未認証・不正値のエミュレータ確認と実環境確認を分けて行う。数独用プロジェクトやルールは変更しない。
 
@@ -87,6 +87,10 @@ Firestore Standardのdefaultデータベースを東京 `asia-northeast1` に本
 Googleアカウントへのログインは利用者から完了報告あり。Arrow JourneyアプリへのOAuthポップアップ選択と実同期は別の確認で、現在利用者のアカウント選択を依頼中。スマートフォン実機のタップ・音・インストール、物理的に別の端末間の同期は未確認。
 
 ## ローカル検証
+
+0.2.2: 角丸経路、4色arrowTheme、保存後に次の矢印を選べる並行演出を追加。旧5項目の端末設定は読み出し値だけ補完し、元データ・途中盤面・revisionを維持する。Firestoreのthemeは省略可能、存在後の削除は拒否、値は4IDに限定する。新アプリは旧クラウドへ安全に色設定を追加できる。旧0.2.1のJSは未知の設定キーを拒否するため、同じ端末の別タブで新6項目を保存した場合の最新プロファイル読込も、色が同期されたアカウントのクラウド同期も、アプリ更新が必要。元データを初期化せず「更新」または再読込で新しい版へ切り替える。
+
+通常Node57件成功・Emulator専用1件skip、ブラウザー10件成功。同時に2本が移動する状態、通常演出ありの全消去、4色即反映と再読込、マス全体入力を確認。専用demo-arrow-journeyのローカルFirestore Emulatorと実SDKで24件成功。本番データへ試験書込はしておらず、終了後8197の待受停止も確認した。物理端末間の色同期と実スマートフォンはこの結果に含めない。
 
 0.2.1の入力修正: 線から0.3マス以内という制限を、占有セルの正方形全体へ変更した。追加Node試験は四隅・共有境界・空き/除去/演出中・拡大移動・表示領域外を検証。追加ブラウザー試験は実マウスイベントとエミュレートしたタッチで、尾/胴体/先端の各4隅、除去後の空きマス、拡大後の端を検証した。通常Node48件成功・Emulator専用1件skip、ローカルブラウザー8件成功。Browser skillは一覧にないため、既存のPlaywright試験を使用した。PC1440×1000とモバイル幅354×780での結果であり、物理的なスマートフォンの確認ではない。
 

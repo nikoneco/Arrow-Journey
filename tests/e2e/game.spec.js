@@ -94,9 +94,6 @@ test("full clear is atomic, returns home and is counted once after reload", asyn
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "設定", exact: true }).click();
-  await page.getByLabel("動きを減らす").check();
-  await page.getByRole("button", { name: "閉じる", exact: true }).click();
   await start(page);
   const p = await readProfile(page),
     order = solveBoard(p.activeGame.board).order;
@@ -114,6 +111,88 @@ test("full clear is atomic, returns home and is counted once after reload", asyn
   expect(Object.keys(after.clears)).toHaveLength(1);
   await page.getByRole("button", { name: "成績", exact: true }).click();
   await expect(page.locator(".stats-total strong")).toHaveText("1");
+});
+
+test("the next arrow can leave while another one is moving, including a newly unblocked arrow", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await start(page);
+  const first = (await readProfile(page)).activeGame;
+  const removable = getRemovable(first.board, first.remainingIds);
+  const id = removable.sort(
+    (a, b) =>
+      first.board.arrows.find((v) => v.id === b).cells.length -
+      first.board.arrows.find((v) => v.id === a).cells.length,
+  )[0];
+  await activate(page, id);
+  await expect(page.locator("#remaining")).toHaveText(
+    String(first.remainingIds.length - 1),
+  );
+  await expect(page.locator(".arrow-ghosts > g")).toHaveCount(1);
+  const after = (await readProfile(page)).activeGame;
+  const candidates = getRemovable(after.board, after.remainingIds);
+  const next = candidates.find((v) => !removable.includes(v)) || candidates[0];
+  await activate(page, next);
+  await expect(page.locator("#remaining")).toHaveText(
+    String(first.remainingIds.length - 2),
+  );
+  await expect(page.locator(".arrow-ghosts > g")).toHaveCount(2);
+  const saved = (await readProfile(page)).activeGame;
+  expect(saved.remainingIds).not.toContain(id);
+  expect(saved.remainingIds).not.toContain(next);
+  expect(saved.misses).toBe(0);
+  await page.getByRole("button", { name: "ホーム", exact: true }).click();
+  await page.getByRole("button", { name: /つづきから/ }).click();
+  await expect(page.locator("#remaining")).toHaveText(
+    String(saved.remainingIds.length),
+  );
+});
+
+test("four arrow colors update the current puzzle and persist after reload", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 354, height: 780 });
+  await page.goto("/");
+  await start(page);
+  const before = (await readProfile(page)).activeGame;
+  await page.getByRole("button", { name: "設定", exact: true }).click();
+  const colors = [
+    ["グリーン", "forest", "#293f37"],
+    ["ブルー", "ocean", "#205879"],
+    ["パープル", "grape", "#66517a"],
+    ["テラコッタ", "ember", "#a04e35"],
+  ];
+  await expect(page.getByRole("radio")).toHaveCount(4);
+  for (const [label, id, ink] of colors) {
+    await page.getByRole("radio", { name: label, exact: true }).check();
+    await expect
+      .poll(async () => (await readProfile(page)).settings.arrowTheme.value)
+      .toBe(id);
+    await expect(page.locator(".board-arrow").first()).toHaveAttribute(
+      "stroke",
+      ink,
+    );
+  }
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.getByRole("button", { name: "閉じる", exact: true }).click();
+  const bodies = await page
+    .locator(".board-arrow .arrow-body")
+    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("d")));
+  expect(bodies.some((body) => body.includes("Q"))).toBe(true);
+  await page.reload();
+  await page.getByRole("button", { name: /つづきから/ }).click();
+  await expect(page.locator(".board-arrow").first()).toHaveAttribute(
+    "stroke",
+    "#a04e35",
+  );
+  const after = (await readProfile(page)).activeGame;
+  expect(after.playId).toBe(before.playId);
+  expect(after.remainingIds).toEqual(before.remainingIds);
 });
 test("mobile 390/354px fits; offline shell, worker generation and resume work", async ({
   page,

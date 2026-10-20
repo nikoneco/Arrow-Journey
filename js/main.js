@@ -17,6 +17,7 @@ import {
 } from "./storage.js";
 import { initializeCloud } from "./cloud.js";
 import { Soundscape } from "./audio.js";
+import { ARROW_THEMES } from "./themes.js";
 import { FIREBASE_CONFIG, PUBLIC_CONFIG_URL } from "./config.js";
 import { bundledProfiles, loadPublicConfig } from "./public-config.js";
 
@@ -99,6 +100,11 @@ function failed(e) {
 }
 function applySettings() {
   audio.configure(settings());
+  const theme = settings().arrowTheme || "forest";
+  boardView?.setTheme(theme);
+  app.querySelectorAll('[data-setting="arrowTheme"]').forEach((input) => {
+    input.checked = input.value === theme;
+  });
   document.documentElement.classList.toggle("reduce-motion", motion());
 }
 function header() {
@@ -132,6 +138,7 @@ function render() {
         scheduleViewSave();
       },
     });
+    boardView.setTheme(settings().arrowTheme || "forest");
     boardView.setBoard(g.board, g.remainingIds, {
       hintId: g.hintId,
       reducedMotion: motion(),
@@ -388,9 +395,11 @@ async function tap(id) {
     if (token !== epoch) return;
     boardView?.setHint(null);
     audio.effect("remove");
-    await boardView?.removeArrow(id);
-    if (token !== epoch) return;
+    // Logical removal is already saved. Other arrows can be tapped while it moves.
+    boardView?.removeArrow(id);
     if (finished) {
+      await boardView?.whenIdle();
+      if (token !== epoch) return;
       completion = {
         difficulty: g.board.difficulty,
         misses: g.misses,
@@ -604,7 +613,7 @@ function openSettings() {
   const s = settings();
   const d = modal(
     "設定",
-    `<div class="settings-fields">${[
+    `<fieldset class="theme-picker"><legend>矢印の色</legend><div class="theme-options">${ARROW_THEMES.map((theme) => `<label class="theme-option"><input type="radio" name="arrow-theme" value="${theme.id}" data-setting="arrowTheme" ${(s.arrowTheme || "forest") === theme.id ? "checked" : ""}><span class="theme-swatch" style="background:${theme.ink}" aria-hidden="true"></span><span>${theme.label}</span></label>`).join("")}</div></fieldset><div class="settings-fields">${[
       ["bgm", "BGM", ""],
       ["sfx", "効果音", ""],
     ]
@@ -614,12 +623,16 @@ function openSettings() {
       )
       .join(
         "",
-      )}<div class="setting-row motion-row"><label for="reduced-motion"><strong>動きを減らす</strong><small>矢印の演出を短くします</small></label><input class="switch" type="checkbox" id="reduced-motion" data-setting="reducedMotion" ${s.reducedMotion ? "checked" : ""}></div></div><section class="account"><h3>成績と設定の同期</h3><p>${cloud?.configured ? (owner === "guest" ? "Googleアカウントで、成績と設定をほかの端末にも。" : "ログイン中 · 途中盤面はこの端末だけに保存します。") : "Google連携は準備中です。<br>成績・設定・途中盤面は、この端末に保存されています。"}</p><button class="secondary" id="login" ${!cloud?.configured ? "disabled" : ""}>${owner === "guest" ? "Googleでログイン" : "ログアウト"}</button>${cloud?.configured && owner !== "guest" ? '<button class="text-button" id="sync">今すぐ同期</button>' : ""}<p class="sync-status" id="sync-status"></p></section><p class="dialog-note">Arrow Journey 0.2.1<br></p>`,
+      )}<div class="setting-row motion-row"><label for="reduced-motion"><strong>動きを減らす</strong><small>矢印の演出を短くします</small></label><input class="switch" type="checkbox" id="reduced-motion" data-setting="reducedMotion" ${s.reducedMotion ? "checked" : ""}></div></div><section class="account"><h3>成績と設定の同期</h3><p>${cloud?.configured ? (owner === "guest" ? "Googleアカウントで、成績と設定をほかの端末にも。" : "ログイン中 · 途中盤面はこの端末だけに保存します。") : "Google連携は準備中です。<br>成績・設定・途中盤面は、この端末に保存されています。"}</p><button class="secondary" id="login" ${!cloud?.configured ? "disabled" : ""}>${owner === "guest" ? "Googleでログイン" : "ログアウト"}</button>${cloud?.configured && owner !== "guest" ? '<button class="text-button" id="sync">今すぐ同期</button>' : ""}<p class="sync-status" id="sync-status"></p></section><p class="dialog-note">Arrow Journey 0.2.2<br></p>`,
   );
   d.querySelectorAll("[data-setting]").forEach((input) =>
     input.addEventListener("change", async () => {
       const value =
-        input.type === "checkbox" ? input.checked : Number(input.value);
+        input.type === "checkbox"
+          ? input.checked
+          : input.type === "range"
+            ? Number(input.value)
+            : input.value;
       if (input.type === "range")
         input.nextElementSibling.value = Math.round(value * 100) + "%";
       await changeSettings({ [input.dataset.setting]: value });

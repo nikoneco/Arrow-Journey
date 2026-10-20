@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { initializeCloud } from '../js/cloud.js';
-import { createProfile } from '../js/storage.js';
+import { createProfile, updateSettings } from '../js/storage.js';
 const config={apiKey:'test',projectId:'demo-arrow',authDomain:'example.test',appId:'test'};
 function mockSdk() {
   const records=new Map(),auth={currentUser:{uid:'alice',displayName:'A'}},snapshot=(path)=>({id:path.split('/').at(-1),exists:()=>records.has(path),data:()=>structuredClone(records.get(path))});
@@ -44,4 +44,24 @@ test('invalid remote record is surfaced, not overwritten or dropped',async()=>{
   sdk.records.set('users/alice/playSummaries/play-1',{playId:'play-1',difficulty:'easy',misses:4,hintsUsed:0,board:{cells:[]}});
   await assert.rejects(cloud.sync('uid:alice',sample()),{code:'CLOUD_DATA'});
   assert.ok(sdk.records.get('users/alice/playSummaries/play-1').board);
+});
+test('new client imports legacy five-setting cloud and adds theme without resetting existing fields',async()=>{
+  const sdk=mockSdk(),cloud=await initializeCloud(config,{},sdk),legacy=createProfile('uid:alice').settings;
+  delete legacy.arrowTheme;legacy.bgmVolume={value:0.9,updatedAt:500,deviceId:'old-device'};
+  sdk.records.set('users/alice/preferences/app',structuredClone(legacy));
+  const p=createProfile('uid:alice');delete p.settings.arrowTheme;
+  const merged=await cloud.sync('uid:alice',p);
+  assert.deepEqual(merged.settings.arrowTheme,{value:'forest',updatedAt:0,deviceId:'default'});
+  assert.deepEqual(merged.settings.bgmVolume,legacy.bgmVolume);
+  const stored=sdk.records.get('users/alice/preferences/app');
+  const existing=structuredClone(stored);delete existing.arrowTheme;assert.deepEqual(existing,legacy);
+  const chosen=updateSettings(merged,{arrowTheme:'ember'},'new-device',100);
+  const synced=await cloud.sync('uid:alice',chosen);assert.equal(synced.settings.arrowTheme.value,'ember');
+  assert.deepEqual(await cloud.sync('uid:alice',synced),synced);
+});
+test('cloud invalid theme is surfaced and preserved rather than silently replaced',async()=>{
+  const sdk=mockSdk(),cloud=await initializeCloud(config,{},sdk),settings=createProfile('uid:alice').settings;
+  settings.arrowTheme.value='invalid-theme';sdk.records.set('users/alice/preferences/app',settings);
+  await assert.rejects(cloud.sync('uid:alice',createProfile('uid:alice')),{code:'CLOUD_DATA'});
+  assert.equal(sdk.records.get('users/alice/preferences/app').arrowTheme.value,'invalid-theme');
 });
