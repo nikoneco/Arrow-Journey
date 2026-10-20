@@ -70,6 +70,22 @@ Script Propertiesの接続先と配信版0.2.0を設定し、所有者が読取�
 
 公式資料: [Firestoreトランザクション](https://firebase.google.com/docs/firestore/manage-data/transactions)、[Googleログイン](https://firebase.google.com/docs/auth/web/google-signin)、[ルールのフィールド制約](https://firebase.google.com/docs/firestore/security/rules-fields)。
 
+## 専用Firebaseの設定記録
+
+2026-10-20、ChromeでArrow Journey専用の `arrow-journey-74d42` を新規作成。Sparkプラン、Analytics無効。Webアプリを登録し、公開Web構成だけをconfigへ設定した。Googleプロバイダー有効、承認済みドメインへ `nikoneco.github.io` を追加した。管理者鍵やアカウントメールを公開ソースに置いていない。
+
+Firestore Standardのdefaultデータベースを東京 `asia-northeast1` に本番環境モードで作成。`firestore.rules` と空白・コメント以外が一致するルールを管理画面で公開し、公開済み表示と本文一致を確認した。匿名REST読取は403 PERMISSION_DENIED。本人の認証・書込・同期と別端末の挙動は、この設定完了や匿名拒否だけで検証済みとはしない。
+
+## Pages公開と公開後の確認
+
+公開URLは https://nikoneco.github.io/Arrow-Journey/ 。2026-10-20、コミット `3b0630c` をmainへpushし、GitHub Actions run `39433490044` のbuild/deployがsuccessで完了した。公開資産13件（HTML、JS、Worker、CSS、アイコン、manifest、SW）はすべてHTTP200、ローカルビルドとのSHA256一致。manifestの解決後ID・start・scopeはこのURLで一致し、数独のIDや公開先は変更していない。
+
+公開URL専用に起動先を合わせたブラウザー試験5件が成功。ミス・ヒント・再開・新規置換、全消去と二重計上防止、390/354px、オフライン生成、旧タブ競合、除去中ホームを確認。Chromeでも公開Expertを開いて表示を確認した。実ブラウザーからGASへ送られた公開metadata読取のHTTP200、schema整合、配信版0.2.0を確認した。
+
+ローカルの更新試験は待機SWの更新ボタンと保存保持、資産URL変更を伴う2版・2タブのオフライン生成、旧タブ更新後のキャッシュ整理を確認。これらは公開サービスへの意図的な二版切替実験とは区別する。通常Node試験45件成功、Firestore Emulator専用1件は通常skip。独立レビューは修正後35ファイル固定候補でPASS。
+
+Googleアカウントへのログインは利用者から完了報告あり。Arrow JourneyアプリへのOAuthポップアップ選択と実同期は別の確認で、現在利用者のアカウント選択を依頼中。スマートフォン実機のタップ・音・インストール、物理的に別の端末間の同期は未確認。
+
 ## ローカル検証
 
 `node --test tests/storage.test.js tests/cloud.test.js tests/cloud.gas.test.js`で、IndexedDBの所有者分離・CAS・破損保持・単調増加、同期の再送・アカウント切替・盤面除外、GASの読取制限を確認できる。
