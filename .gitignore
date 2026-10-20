@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env*
+*.local.*
+.clasp.json
+.firebase/
+*-debug.log
+.qa/
