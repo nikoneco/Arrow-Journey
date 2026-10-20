@@ -30,16 +30,6 @@ function headData(points) {
   return `M${x - dx * 0.23 - dy * 0.17},${y - dy * 0.23 + dx * 0.17} L${x},${y} L${x - dx * 0.23 + dy * 0.17},${y - dy * 0.23 - dx * 0.17}`;
 }
 
-function distanceToSegment(x, y, a, b) {
-  const dx = b[0] - a[0],
-    dy = b[1] - a[1];
-  const t = Math.max(
-    0,
-    Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / (dx * dx + dy * dy || 1)),
-  );
-  return Math.hypot(x - a[0] - dx * t, y - a[1] - dy * t);
-}
-
 /** SVG board and gestures. Game rules and input locking remain with the caller. */
 export class BoardView {
   constructor(container, { onTap = () => {}, onViewChange = () => {} } = {}) {
@@ -50,6 +40,7 @@ export class BoardView {
     this.fingerprint = "";
     this.remaining = new Set();
     this.arrows = new Map();
+    this.cellOwners = new Map();
     this.groups = new Map();
     this.ghosts = new Map();
     this.feedback = new Map();
@@ -163,6 +154,10 @@ export class BoardView {
     this.arrows = new Map(
       board.arrows.map((arrow) => [String(arrow.id), arrow]),
     );
+    this.cellOwners.clear();
+    for (const [id, arrow] of this.arrows)
+      for (const [x, y] of arrow.cells)
+        this.cellOwners.set(y * board.width + x, id);
     this.remaining = new Set(Array.from(remainingIds, String));
     this.svg.setAttribute("viewBox", `0 0 ${board.width} ${board.height}`);
     this.clipRect.setAttribute("width", board.width);
@@ -468,27 +463,24 @@ export class BoardView {
   }
 
   tapAt(clientX, clientY) {
+    if (!this.board || this.destroyed) return;
     const point = this.localPoint(clientX, clientY);
-    const x = (point.x - this.panX) / this.zoomLevel - 0.5;
-    const y = (point.y - this.panY) / this.zoomLevel - 0.5;
-    const candidates = [];
-    for (const [id, arrow] of this.arrows) {
-      if (!this.remaining.has(id) || this.ghosts.has(id)) continue;
-      let distance = Infinity;
-      for (let i = 1; i < arrow.cells.length; i += 1)
-        distance = Math.min(
-          distance,
-          distanceToSegment(x, y, arrow.cells[i - 1], arrow.cells[i]),
-        );
-      if (distance <= 0.3) candidates.push({ arrow, distance });
-    }
-    candidates.sort((a, b) => a.distance - b.distance);
+    // A cell occupies [x,x+1) × [y,y+1), including the area off its line.
+    // Check the visible viewport too: pointer capture can end just outside it.
     if (
-      candidates.length &&
-      (candidates.length === 1 ||
-        candidates[1].distance - candidates[0].distance > 0.065)
+      point.x < 0 ||
+      point.x >= this.board.width ||
+      point.y < 0 ||
+      point.y >= this.board.height
     )
-      this.onTap(candidates[0].arrow.id);
+      return;
+    const x = Math.floor((point.x - this.panX) / this.zoomLevel);
+    const y = Math.floor((point.y - this.panY) / this.zoomLevel);
+    if (x < 0 || x >= this.board.width || y < 0 || y >= this.board.height)
+      return;
+    const id = this.cellOwners.get(y * this.board.width + x);
+    if (this.remaining.has(id) && !this.ghosts.has(id))
+      this.onTap(this.arrows.get(id).id);
   }
 
   zoom(factor) {

@@ -88,6 +88,8 @@ Googleアカウントへのログインは利用者から完了報告あり。Ar
 
 ## ローカル検証
 
+0.2.1の入力修正: 線から0.3マス以内という制限を、占有セルの正方形全体へ変更した。追加Node試験は四隅・共有境界・空き/除去/演出中・拡大移動・表示領域外を検証。追加ブラウザー試験は実マウスイベントとエミュレートしたタッチで、尾/胴体/先端の各4隅、除去後の空きマス、拡大後の端を検証した。通常Node48件成功・Emulator専用1件skip、ローカルブラウザー8件成功。Browser skillは一覧にないため、既存のPlaywright試験を使用した。PC1440×1000とモバイル幅354×780での結果であり、物理的なスマートフォンの確認ではない。
+
 `node --test tests/storage.test.js tests/cloud.test.js tests/cloud.gas.test.js`で、IndexedDBの所有者分離・CAS・破損保持・単調増加、同期の再送・アカウント切替・盤面除外、GASの読取制限を確認できる。
 
 ルール実行試験は `tests/cloud.rules.test.js`。ローカルFirestore Emulatorを専用の `demo-arrow-journey` で127.0.0.1に起動し、`FIRESTORE_EMULATOR_HOST=127.0.0.1:<port>`を指定する。`@firebase/rules-unit-testing`がプロジェクトにない場合、`ARROW_RULES_TEST_MODULE`へ既存の同パッケージのエントリーファイル絶対パスを指定できる。エミュレータ未指定の通常テストではこの1件だけ明示的にskipする。本番プロジェクトを指定しない。

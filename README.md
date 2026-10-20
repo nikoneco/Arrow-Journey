@@ -43,7 +43,7 @@ npm run test:e2e
 
 ## クラウドと公開の状態
 
-0.2.0。公開先: [Arrow Journey PWA](https://nikoneco.github.io/Arrow-Journey/)。生成器2.0.0で矢印の入り組み方と依存関係を強化。公開・認証・同期の確認記録は [INTEGRATION.md](docs/INTEGRATION.md) に記載する。iPhone/Android実機の確認は別途必要。
+0.2.1。公開先: [Arrow Journey PWA](https://nikoneco.github.io/Arrow-Journey/)。生成器2.0.0で矢印の入り組み方と依存関係を強化。矢印が占有する各マスの全体でタップを受け付け、線から離れた端や角も選択できる。公開・認証・同期の確認記録は [INTEGRATION.md](docs/INTEGRATION.md) に記載する。iPhone/Android実機の確認は別途必要。
 
 - Arrow Journey専用FirebaseをSparkプランで作成。Google認証・本人UID別のFirestoreルールを設定。途中盤面は送信しない。
 - `gas/` は公開読取API。実Sheetの4難易度metadataを匿名配信し、接続失敗時は同梱値を使う。ゲーム開始にGAS接続を要求しない。

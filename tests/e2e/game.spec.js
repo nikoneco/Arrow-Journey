@@ -185,3 +185,99 @@ test("Home works during escape and preserves the accepted removal", async ({
   );
   expect((await readProfile(page)).activeGame.remainingIds).not.toContain(id);
 });
+
+test("whole-cell corners respond to mouse and touch, including after zoom, while removed cells stay empty", async ({
+  browser,
+}) => {
+  for (const mobile of [false, true]) {
+    const context = await browser.newContext({
+      baseURL: test.info().project.use.baseURL,
+      viewport: mobile
+        ? { width: 354, height: 780 }
+        : { width: 1440, height: 1000 },
+      hasTouch: mobile,
+    });
+    try {
+      const page = await context.newPage();
+      const errors = [];
+      page.on("pageerror", (e) => errors.push(e.message));
+      await page.goto("/");
+      await start(page);
+      const g = (await readProfile(page)).activeGame;
+      const blocked = g.board.arrows.find(
+        (a) =>
+          a.cells.length >= 3 &&
+          !canRemove(g.board, g.remainingIds, a.id).allowed,
+      );
+      const rect = await page.locator("#board svg").boundingBox();
+      const tap = async (
+        cell,
+        offset = [0.92, 0.92],
+        zoom = 1,
+        panX = 0,
+        panY = 0,
+      ) => {
+        const x =
+          rect.x + (((cell[0] + offset[0]) * zoom + panX) * rect.width) / 20;
+        const y =
+          rect.y + (((cell[1] + offset[1]) * zoom + panY) * rect.height) / 20;
+        if (mobile) await page.touchscreen.tap(x, y);
+        else await page.mouse.click(x, y);
+      };
+      let misses = 0;
+      // Tail, body and head: these corners are outside the old 0.3-cell line radius.
+      for (const cell of [
+        blocked.cells[0],
+        blocked.cells[Math.floor(blocked.cells.length / 2)],
+        blocked.cells.at(-1),
+      ]) {
+        for (const offset of [
+          [0.08, 0.08],
+          [0.92, 0.08],
+          [0.08, 0.92],
+          [0.92, 0.92],
+        ]) {
+          await tap(cell, offset);
+          await expect(page.locator("#misses")).toHaveText(String(++misses));
+        }
+      }
+      const id = getRemovable(g.board, g.remainingIds)[0];
+      const free = g.board.arrows.find((a) => a.id === id).cells[0];
+      await tap(free);
+      await expect(page.locator("#remaining")).toHaveText(
+        String(g.remainingIds.length - 1),
+      );
+      await tap(free);
+      await page.evaluate(
+        () =>
+          new Promise((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(resolve)),
+          ),
+      );
+      const after = (await readProfile(page)).activeGame;
+      expect(after.misses).toBe(misses);
+      expect(after.remainingIds).toHaveLength(g.remainingIds.length - 1);
+      await page.getByRole("button", { name: "拡大", exact: true }).click();
+      const transform = await page
+        .locator("#board svg > g")
+        .getAttribute("transform");
+      const [, panX, panY, zoom] = transform
+        .match(/translate\(([-.\d]+) ([-.\d]+)\) scale\(([-.\d]+)\)/)
+        .map(Number);
+      const current = (await readProfile(page)).activeGame;
+      const zoomedCell = current.board.arrows
+        .filter(
+          (a) =>
+            current.remainingIds.includes(a.id) &&
+            !canRemove(current.board, current.remainingIds, a.id).allowed,
+        )
+        .flatMap((a) => a.cells)
+        .find(([x, y]) => x >= 5 && x <= 14 && y >= 5 && y <= 14);
+      await tap(zoomedCell, [0.92, 0.92], zoom, panX, panY);
+      await expect(page.locator("#misses")).toHaveText(String(++misses));
+      expect(errors).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  }
+});
