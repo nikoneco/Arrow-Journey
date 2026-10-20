@@ -67,7 +67,7 @@ test('cloud payload explicitly excludes puzzle, seed, removal history and local 
 });
 test('legacy five-setting IDB read adds default theme without changing raw game, settings or revision',async()=>{
   const indexedDB=new IDBFactory(),name='legacy-settings',store=await openStore({indexedDB,name});
-  const raw=createProfile('guest');delete raw.settings.arrowTheme;raw.revision=7;
+  const raw=createProfile('guest');delete raw.settings.arrowTheme;delete raw.settings.colorMode;raw.revision=7;
   raw.settings.bgmEnabled={value:false,updatedAt:50,deviceId:'old-device'};
   raw.summaries['play-1']=summary('play-1',2);
   raw.activeGame={playId:'play-1',board:{seed:'local-only'},remainingIds:['a'],misses:2,hintsUsed:0,hintId:null,hintRevision:null,boardRevision:4,startedAt:100};
@@ -75,14 +75,16 @@ test('legacy five-setting IDB read adds default theme without changing raw game,
   await new Promise((resolve,reject)=>{const tx=db.transaction('profiles','readwrite');tx.objectStore('profiles').put(raw);tx.oncomplete=resolve;tx.onabort=reject;});
   const read=await store.read('guest');
   assert.deepEqual(read.settings.arrowTheme,{value:'forest',updatedAt:0,deviceId:'default'});
-  const legacyView=structuredClone(read);delete legacyView.settings.arrowTheme;
+  assert.deepEqual(read.settings.colorMode,{value:'light',updatedAt:0,deviceId:'default'});
+  const legacyView=structuredClone(read);delete legacyView.settings.arrowTheme;delete legacyView.settings.colorMode;
   assert.deepEqual(legacyView,raw);assert.deepEqual(await store.exportRaw('guest'),raw);
   const themed=await store.write('guest',updateSettings(read,{arrowTheme:'ocean'},'new-device',100),7);
   assert.equal(themed.revision,8);assert.deepEqual(themed.activeGame,raw.activeGame);
-  const legacyWrite=structuredClone(themed);delete legacyWrite.settings.arrowTheme;
+  const legacyWrite=structuredClone(themed);delete legacyWrite.settings.arrowTheme;delete legacyWrite.settings.colorMode;
   legacyWrite.settings.sfxEnabled={value:false,updatedAt:200,deviceId:'old-device'};
   const preserved=await store.write('guest',legacyWrite,8);
   assert.deepEqual(preserved.settings.arrowTheme,themed.settings.arrowTheme);
+  assert.deepEqual(preserved.settings.colorMode,themed.settings.colorMode);
   assert.equal(preserved.settings.sfxEnabled.value,false);assert.equal(preserved.revision,9);
   store.close();db.close();
 });
@@ -98,14 +100,48 @@ test('theme enum is strict in local updates and corrupt records are not defaulte
 });
 test('legacy cloud settings do not reset chosen theme and enum/timestamp conflicts remain strict',()=>{
   const p=updateSettings(createProfile('uid:alice'),{arrowTheme:'grape'},'device-a',100);
-  const legacy=empty();legacy.settings=createProfile('uid:alice').settings;delete legacy.settings.arrowTheme;
+  const legacy=empty();legacy.settings=createProfile('uid:alice').settings;delete legacy.settings.arrowTheme;delete legacy.settings.colorMode;
   legacy.settings.sfxEnabled={value:false,updatedAt:101,deviceId:'old-device'};
   const merged=mergeSyncData(p,legacy);assert.equal(merged.settings.arrowTheme.value,'grape');assert.equal(merged.settings.sfxEnabled.value,false);
   const older=empty();older.settings.arrowTheme={value:'ocean',updatedAt:99,deviceId:'z'};
   assert.equal(mergeSyncData(merged,older).settings.arrowTheme.value,'grape');
   older.settings.arrowTheme.updatedAt=100;assert.equal(mergeSyncData(merged,older).settings.arrowTheme.value,'ocean');
   older.settings.arrowTheme.value='unknown';assert.throws(()=>mergeSyncData(merged,older),{code:'CLOUD_DATA'});
-  const oldProfile=createProfile('uid:alice');delete oldProfile.settings.arrowTheme;
+  const oldProfile=createProfile('uid:alice');delete oldProfile.settings.arrowTheme;delete oldProfile.settings.colorMode;
   assert.equal(toCloudPayload(oldProfile).settings.arrowTheme.value,'forest');
   assert.equal(Object.hasOwn(oldProfile.settings,'arrowTheme'),false);
+});
+test('six-setting IDB read preserves selected theme and game while adding light without a raw write',async()=>{
+  const indexedDB=new IDBFactory(),name='six-setting',store=await openStore({indexedDB,name});
+  const raw=updateSettings(createProfile('guest'),{arrowTheme:'grape'},'old-device',300);delete raw.settings.colorMode;raw.revision=11;
+  raw.summaries['play-1']=summary('play-1',3);
+  raw.activeGame={playId:'play-1',board:{seed:'local-only'},remainingIds:['a'],misses:3,hintsUsed:0,hintId:null,hintRevision:null,boardRevision:4,startedAt:100};
+  const db=await new Promise(resolve=>{const q=indexedDB.open(name,1);q.onsuccess=()=>resolve(q.result);});
+  await new Promise((resolve,reject)=>{const tx=db.transaction('profiles','readwrite');tx.objectStore('profiles').put(raw);tx.oncomplete=resolve;tx.onabort=reject;});
+  const read=await store.read('guest'),oldShape=structuredClone(read);delete oldShape.settings.colorMode;
+  assert.deepEqual(oldShape,raw);assert.deepEqual(await store.exportRaw('guest'),raw);
+  assert.equal(read.settings.colorMode.value,'light');
+  const saved=await store.write('guest',updateSettings(read,{colorMode:'system'},'new-device',400),11);
+  assert.equal(saved.revision,12);assert.deepEqual(saved.activeGame,raw.activeGame);assert.deepEqual(saved.settings.arrowTheme,raw.settings.arrowTheme);
+  const oldWrite=structuredClone(saved);delete oldWrite.settings.colorMode;
+  oldWrite.settings.bgmEnabled={value:false,updatedAt:500,deviceId:'old-device'};
+  const preserved=await store.write('guest',oldWrite,12);
+  assert.deepEqual(preserved.settings.colorMode,saved.settings.colorMode);assert.equal(preserved.settings.bgmEnabled.value,false);
+  store.close();db.close();
+});
+test('color mode enum and merging are strict and monotonic without resetting other preferences',()=>{
+  for(const value of ['light','dark','system'])assert.equal(validSetting('colorMode',{value,updatedAt:1,deviceId:'d'}),true);
+  for(const value of ['auto','DARK','',true,null,{},['dark']]) {
+    assert.equal(validSetting('colorMode',{value,updatedAt:1,deviceId:'d'}),false);
+    assert.throws(()=>updateSettings(createProfile('guest'),{colorMode:value},'d',1),{code:'SETTINGS'});
+  }
+  const p=updateSettings(createProfile('guest'),{colorMode:'dark',arrowTheme:'ocean'},'device-a',100);
+  const legacy=empty();legacy.settings=createProfile('guest').settings;delete legacy.settings.colorMode;
+  assert.equal(mergeSyncData(p,legacy).settings.colorMode.value,'dark');
+  const remote=empty();remote.settings.colorMode={value:'system',updatedAt:99,deviceId:'z'};
+  assert.equal(mergeSyncData(p,remote).settings.colorMode.value,'dark');
+  remote.settings.colorMode.updatedAt=100;const merged=mergeSyncData(p,remote);
+  assert.equal(merged.settings.colorMode.value,'system');assert.deepEqual(merged.settings.arrowTheme,p.settings.arrowTheme);
+  remote.settings.colorMode.value='auto';assert.throws(()=>mergeSyncData(p,remote),{code:'CLOUD_DATA'});
+  p.settings.colorMode.value='auto';assert.throws(()=>toCloudPayload(p),CorruptDataError);
 });

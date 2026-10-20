@@ -1,13 +1,14 @@
 // Only this app's IndexedDB is opened. A complete profile is one atomic record.
-import { ARROW_THEMES } from './themes.js';
+import { ARROW_THEMES, APPEARANCE_MODES } from './themes.js';
 
 export const SCHEMA_VERSION = 1;
 export const DB_NAME = 'arrow-journey-local-v1';
 export const DIFFICULTIES = ['easy', 'normal', 'hard', 'expert'];
-export const DEFAULT_SETTINGS = Object.freeze({ bgmEnabled: true, sfxEnabled: true, bgmVolume: 0.25, sfxVolume: 0.5, reducedMotion: false, arrowTheme: 'forest' });
-const THEME_IDS = new Set(ARROW_THEMES.map(theme => theme.id));
-const REQUIRED_LEGACY_SETTINGS = Object.keys(DEFAULT_SETTINGS).filter(key => key !== 'arrowTheme');
-const defaultTheme = () => ({ value: DEFAULT_SETTINGS.arrowTheme, updatedAt: 0, deviceId: 'default' });
+export const DEFAULT_SETTINGS = Object.freeze({ bgmEnabled: true, sfxEnabled: true, bgmVolume: 0.25, sfxVolume: 0.5, reducedMotion: false, arrowTheme: 'forest', colorMode: 'light' });
+const SETTING_ENUMS = { arrowTheme: new Set(ARROW_THEMES.map(theme => theme.id)), colorMode: new Set(APPEARANCE_MODES.map(mode => mode.id)) };
+const OPTIONAL_SETTINGS = Object.keys(SETTING_ENUMS);
+const REQUIRED_LEGACY_SETTINGS = Object.keys(DEFAULT_SETTINGS).filter(key => !OPTIONAL_SETTINGS.includes(key));
+const defaultSetting = key => ({ value: DEFAULT_SETTINGS[key], updatedAt: 0, deviceId: 'default' });
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const integer = (v, max = Number.MAX_SAFE_INTEGER) => Number.isSafeInteger(v) && v >= 0 && v <= max;
 const id = (v) => typeof v === 'string' && /^[A-Za-z0-9_:-]{1,128}$/.test(v) && !['__proto__', 'constructor', 'prototype'].includes(v);
@@ -24,7 +25,7 @@ export function createProfile(owner) {
 }
 export function validSummary(v, key = v?.playId) { return exact(v, ['playId', 'difficulty', 'misses', 'hintsUsed']) && id(key) && v.playId === key && DIFFICULTIES.includes(v.difficulty) && integer(v.misses, 1_000_000_000) && integer(v.hintsUsed, 3); }
 export function validClear(v, key = v?.boardFingerprint) { return exact(v, ['boardFingerprint', 'playId', 'difficulty', 'misses', 'hintsUsed', 'completedAt']) && id(key) && v.boardFingerprint === key && id(v.playId) && DIFFICULTIES.includes(v.difficulty) && integer(v.misses, 1_000_000_000) && integer(v.hintsUsed, 3) && integer(v.completedAt); }
-export function validSetting(key, v) { return Object.hasOwn(DEFAULT_SETTINGS, key) && exact(v, ['value', 'updatedAt', 'deviceId']) && integer(v.updatedAt) && id(v.deviceId) && (key === 'arrowTheme' ? typeof v.value === 'string' && THEME_IDS.has(v.value) : key.endsWith('Volume') ? typeof v.value === 'number' && Number.isFinite(v.value) && v.value >= 0 && v.value <= 1 : typeof v.value === 'boolean'); }
+export function validSetting(key, v) { return Object.hasOwn(DEFAULT_SETTINGS, key) && exact(v, ['value', 'updatedAt', 'deviceId']) && integer(v.updatedAt) && id(v.deviceId) && (Object.hasOwn(SETTING_ENUMS,key) ? typeof v.value === 'string' && SETTING_ENUMS[key].has(v.value) : key.endsWith('Volume') ? typeof v.value === 'number' && Number.isFinite(v.value) && v.value >= 0 && v.value <= 1 : typeof v.value === 'boolean'); }
 function validGame(g, validateGame) {
   return object(g) && id(g.playId) && object(g.board) && Array.isArray(g.remainingIds) && g.remainingIds.length > 0 && g.remainingIds.every(id) && new Set(g.remainingIds).size === g.remainingIds.length && integer(g.misses, 1_000_000_000) && integer(g.hintsUsed, 3) && integer(g.boardRevision) && integer(g.startedAt) && (g.hintId === null || id(g.hintId)) && (g.hintRevision === null || integer(g.hintRevision)) && (!validateGame || validateGame(g) === true);
 }
@@ -35,9 +36,12 @@ export function validateProfile(profile, owner = profile?.ownerKey, validateGame
     const summary = profile.summaries[profile.activeGame.playId];
     if (!summary || summary.misses !== profile.activeGame.misses || summary.hintsUsed !== profile.activeGame.hintsUsed) throw new CorruptDataError('盤面と成績の保存内容が一致しません。', copy(profile));
   }
-  // 0.2.1's five-setting records remain valid. Never rewrite the raw IDB record on read.
-  if (!Object.hasOwn(profile.settings, 'arrowTheme')) {
-    const migrated = copy(profile); migrated.settings.arrowTheme = defaultTheme(); return migrated;
+  // Five/six-setting records remain valid. Never rewrite the raw IDB record on read.
+  const missing = OPTIONAL_SETTINGS.filter(key => !Object.hasOwn(profile.settings, key));
+  if (missing.length) {
+    const migrated = copy(profile);
+    for (const key of missing) migrated.settings[key] = defaultSetting(key);
+    return migrated;
   }
   return profile;
 }
@@ -100,14 +104,14 @@ export async function openStore({ indexedDB = globalThis.indexedDB, name = DB_NA
     exportRaw(owner) { return transaction(owner,'readonly',(raw) => raw ?? null); },
     write(owner,profile,expectedRevision) {
       requireOwner(owner);
-      const suppliedTheme = object(profile?.settings) && Object.hasOwn(profile.settings, 'arrowTheme');
+      const suppliedOptional = OPTIONAL_SETTINGS.filter(key => object(profile?.settings) && Object.hasOwn(profile.settings,key));
       profile = validateProfile(profile,owner,validateGame);
       if (!integer(expectedRevision) || profile.revision !== expectedRevision) throw new StorageError('REVISION','保存改訂番号が一致しません。');
       const candidate=copy(profile);
       return transaction(owner,'readwrite',(raw,records) => {
         const old=raw === undefined ? createProfile(owner) : validateProfile(raw,owner,validateGame);
         if (old.revision !== expectedRevision) throw new StorageConflictError();
-        if (!suppliedTheme) candidate.settings.arrowTheme = copy(old.settings.arrowTheme);
+        for (const key of OPTIONAL_SETTINGS) if (!suppliedOptional.includes(key)) candidate.settings[key] = copy(old.settings[key]);
         for (const [k,v] of Object.entries(old.summaries)) { const n=candidate.summaries[k]; if (!n || n.difficulty !== v.difficulty || n.misses < v.misses || n.hintsUsed < v.hintsUsed) throw new StorageError('MONOTONIC','保存済み成績を減らすことはできません。'); }
         for (const [k,v] of Object.entries(old.clears)) if (!candidate.clears[k]) throw new StorageError('MONOTONIC','クリア記録を削除することはできません。');
         candidate.revision=old.revision+1; records.put(candidate); return candidate;

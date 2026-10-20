@@ -45,7 +45,9 @@ test("UI, blocked tap, drag exclusion, hint persistence and new-game replacement
   await start(page);
   let p = await readProfile(page),
     g = p.activeGame;
-  expect(g.board.arrows.reduce((n, a) => n + a.cells.length, 0)).toBe(400);
+  expect(g.board.arrows.reduce((n, a) => n + a.cells.length, 0)).toBe(
+    g.board.width * g.board.height,
+  );
   const blocked = g.remainingIds.find(
     (id) => !canRemove(g.board, g.remainingIds, id).allowed,
   );
@@ -55,8 +57,8 @@ test("UI, blocked tap, drag exclusion, hint persistence and new-game replacement
     cell = arrow.cells[Math.floor(arrow.cells.length / 2)],
     r = await page.locator("#board svg").boundingBox();
   await page.mouse.click(
-    r.x + ((cell[0] + 0.5) * r.width) / 20,
-    r.y + ((cell[1] + 0.5) * r.height) / 20,
+    r.x + ((cell[0] + 0.5) * r.width) / g.board.width,
+    r.y + ((cell[1] + 0.5) * r.height) / g.board.height,
   );
   await expect(page.locator("#misses")).toHaveText("1");
   const before = (await readProfile(page)).activeGame.remainingIds.length;
@@ -85,7 +87,7 @@ test("UI, blocked tap, drag exclusion, hint persistence and new-game replacement
   await page.getByRole("button", { name: "ホーム", exact: true }).click();
   await start(page, "hard");
   p = await readProfile(page);
-  expect(p.activeGame.board.width).toBe(28);
+  expect([20, 24, 28, 32]).toContain(p.activeGame.board.width);
   expect(p.activeGame.playId).not.toBe(g.playId);
   expect(p.summaries[g.playId].misses).toBe(1);
   expect(errors).toEqual([]);
@@ -111,6 +113,9 @@ test("full clear is atomic, returns home and is counted once after reload", asyn
   expect(Object.keys(after.clears)).toHaveLength(1);
   await page.getByRole("button", { name: "成績", exact: true }).click();
   await expect(page.locator(".stats-total strong")).toHaveText("1");
+  await expect(page.getByRole("dialog")).not.toContainText("累計ミス");
+  await expect(page.getByRole("dialog")).not.toContainText("ノーミス率");
+  await expect(page.locator(".stats-list")).toContainText("Easy");
 });
 
 test("the next arrow can leave while another one is moving, including a newly unblocked arrow", async ({
@@ -194,6 +199,118 @@ test("four arrow colors update the current puzzle and persist after reload", asy
   expect(after.playId).toBe(before.playId);
   expect(after.remainingIds).toEqual(before.remainingIds);
 });
+
+test("dark appearance and all four colors persist; system mode follows the device", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 354, height: 780 });
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-color-mode",
+    "light",
+  );
+  await start(page);
+  const before = (await readProfile(page)).activeGame;
+  await page.getByRole("button", { name: "設定", exact: true }).click();
+  const mode = page.getByLabel("表示", { exact: true });
+  await expect(mode.locator("option")).toHaveCount(3);
+  await mode.selectOption("dark");
+  await expect(page.locator("html")).toHaveAttribute("data-color-mode", "dark");
+  expect(
+    await page
+      .locator("html")
+      .evaluate((el) => getComputedStyle(el).colorScheme),
+  ).toBe("dark");
+  for (const [label, ink] of [
+    ["グリーン", "#a0cdb1"],
+    ["ブルー", "#8fc2e2"],
+    ["パープル", "#c5addf"],
+    ["テラコッタ", "#e6ac91"],
+  ]) {
+    await page.getByRole("radio", { name: label, exact: true }).check();
+    await expect(page.locator(".board-arrow").first()).toHaveAttribute(
+      "stroke",
+      ink,
+    );
+  }
+  await expect
+    .poll(async () => (await readProfile(page)).settings.colorMode.value)
+    .toBe("dark");
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect(page.locator("html")).toHaveAttribute("data-color-mode", "dark");
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({ path: evidence + "/arrow-dark-settings.png" });
+  await page.getByRole("button", { name: "閉じる", exact: true }).click();
+  await page.screenshot({ path: evidence + "/arrow-dark-board.png" });
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-color-mode", "dark");
+  await page.getByRole("button", { name: /つづきから/ }).click();
+  await expect(page.locator(".board-arrow").first()).toHaveAttribute(
+    "stroke",
+    "#e6ac91",
+  );
+  expect((await readProfile(page)).activeGame.playId).toBe(before.playId);
+  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await mode.selectOption("system");
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-color-mode",
+    "light",
+  );
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(page.locator("html")).toHaveAttribute("data-color-mode", "dark");
+  await expect(page.locator(".board-arrow").first()).toHaveAttribute(
+    "stroke",
+    "#e6ac91",
+  );
+  await mode.selectOption("light");
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-color-mode",
+    "light",
+  );
+  await expect(page.locator(".board-arrow").first()).toHaveAttribute(
+    "stroke",
+    "#a04e35",
+  );
+});
+
+test("the desktop cursor stays a pointer across arrow lines, cell corners and dragging", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await start(page);
+  const game = (await readProfile(page)).activeGame;
+  const cell = game.board.arrows.find((a) => a.cells.length > 3).cells[1];
+  const svg = page.locator("#board svg"),
+    rect = await svg.boundingBox();
+  for (const [dx, dy] of [
+    [0.5, 0.5],
+    [0.08, 0.08],
+    [0.92, 0.92],
+  ]) {
+    const x = rect.x + ((cell[0] + dx) * rect.width) / game.board.width;
+    const y = rect.y + ((cell[1] + dy) * rect.height) / game.board.height;
+    await page.mouse.move(x, y);
+    expect(
+      await page.evaluate(
+        ({ x, y }) => getComputedStyle(document.elementFromPoint(x, y)).cursor,
+        { x, y },
+      ),
+    ).toBe("pointer");
+  }
+  await page.mouse.move(rect.x + 50, rect.y + 50);
+  await page.mouse.down();
+  await page.mouse.move(rect.x + 90, rect.y + 80, { steps: 4 });
+  await expect(svg).toHaveCSS("cursor", "pointer");
+  await page.mouse.up();
+  await expect(svg).toHaveCSS("cursor", "pointer");
+  await page.getByRole("button", { name: "盤面を全体表示" }).click();
+  await expect(svg).toHaveCSS("cursor", "pointer");
+});
 test("mobile 390/354px fits; offline shell, worker generation and resume work", async ({
   page,
   context,
@@ -211,7 +328,11 @@ test("mobile 390/354px fits; offline shell, worker generation and resume work", 
   await context.setOffline(true);
   await page.reload();
   await start(page, "expert");
-  await expect(page.locator(".play-meta")).toContainText("32 × 32");
+  const offlineGame = (await readProfile(page)).activeGame;
+  expect([20, 24, 28, 32]).toContain(offlineGame.board.width);
+  await expect(page.locator(".play-meta")).toContainText(
+    `${offlineGame.board.width} × ${offlineGame.board.height}`,
+  );
   await page.screenshot({ path: evidence + "/arrow-play-mobile.png" });
   await page.setViewportSize({ width: 354, height: 780 });
   expect(
@@ -297,9 +418,12 @@ test("whole-cell corners respond to mouse and touch, including after zoom, while
         panY = 0,
       ) => {
         const x =
-          rect.x + (((cell[0] + offset[0]) * zoom + panX) * rect.width) / 20;
+          rect.x +
+          (((cell[0] + offset[0]) * zoom + panX) * rect.width) / g.board.width;
         const y =
-          rect.y + (((cell[1] + offset[1]) * zoom + panY) * rect.height) / 20;
+          rect.y +
+          (((cell[1] + offset[1]) * zoom + panY) * rect.height) /
+            g.board.height;
         if (mobile) await page.touchscreen.tap(x, y);
         else await page.mouse.click(x, y);
       };
@@ -359,4 +483,126 @@ test("whole-cell corners respond to mouse and touch, including after zoom, while
       await context.close();
     }
   }
+});
+
+test("removed cells keep centered guide dots through resume, zoom and dark appearance", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await start(page, "hard");
+  const game = (await readProfile(page)).activeGame;
+  await expect(page.locator(".board-empty-dot")).toHaveCount(0);
+  const removed = solveBoard(game.board).order.slice(0, 10);
+  let count = 0;
+  for (const id of removed) {
+    count += game.board.arrows.find((a) => a.id === id).cells.length;
+    await activate(page, id);
+    await expect(page.locator(".board-empty-dot")).toHaveCount(count);
+  }
+  const coordinates = await page
+    .locator(".board-empty-dot")
+    .evaluateAll((nodes) =>
+      nodes.map((n) => [
+        Number(n.getAttribute("cx")),
+        Number(n.getAttribute("cy")),
+      ]),
+    );
+  const expected = game.board.arrows
+    .filter((a) => removed.includes(a.id))
+    .flatMap((a) => a.cells.map(([x, y]) => [x + 0.5, y + 0.5]));
+  const sort = (items) => items.map((v) => v.join(",")).sort();
+  expect(sort(coordinates)).toEqual(sort(expected));
+  await expect(page.locator(".board-empty-dots")).toHaveAttribute(
+    "pointer-events",
+    "none",
+  );
+  await page.getByRole("button", { name: "拡大", exact: true }).click();
+  await expect(page.locator(".board-empty-dot")).toHaveCount(count);
+  await page.getByRole("button", { name: "盤面を全体表示" }).click();
+  await expect(page.locator(".arrow-ghosts > g")).toHaveCount(0);
+  await page.screenshot({ path: evidence + "/arrow-guide-dots.png" });
+  await page.getByRole("button", { name: "設定", exact: true }).click();
+  const lightFill = await page
+    .locator(".board-empty-dots")
+    .getAttribute("fill");
+  await page.getByLabel("表示", { exact: true }).selectOption("dark");
+  await expect(page.locator(".board-empty-dots")).not.toHaveAttribute(
+    "fill",
+    lightFill,
+  );
+  await page.getByRole("button", { name: "閉じる", exact: true }).click();
+  await page.screenshot({ path: evidence + "/arrow-guide-dots-dark.png" });
+  await page.reload();
+  await page.getByRole("button", { name: /つづきから/ }).click();
+  await expect(page.locator(".board-empty-dot")).toHaveCount(count);
+  expect((await readProfile(page)).activeGame.remainingIds.length).toBe(
+    game.remainingIds.length - removed.length,
+  );
+  await expect(page.locator("#misses")).toHaveText("0");
+});
+
+test("taps received while a view save is blocked are processed after that save", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await start(page);
+  const game = (await readProfile(page)).activeGame;
+  const ids = getRemovable(game.board, game.remainingIds).slice(0, 2);
+  expect(ids).toHaveLength(2);
+  // Hold a real IDB transaction so the production view-save stays in flight.
+  await page.evaluate(
+    () =>
+      new Promise((resolve, reject) => {
+        const request = indexedDB.open("arrow-journey-local-v1");
+        request.onerror = reject;
+        request.onsuccess = () => {
+          const db = request.result,
+            original = IDBDatabase.prototype.transaction;
+          const transaction = original.call(db, "profiles", "readwrite");
+          let holding = true;
+          window.qaViewWriteStarted = false;
+          IDBDatabase.prototype.transaction = function (
+            stores,
+            mode,
+            ...options
+          ) {
+            if (mode === "readwrite") window.qaViewWriteStarted = true;
+            return original.call(this, stores, mode, ...options);
+          };
+          window.qaReleaseLock = () => {
+            holding = false;
+            IDBDatabase.prototype.transaction = original;
+          };
+          const keepAlive = () => {
+            transaction.objectStore("profiles").get("guest").onsuccess = () => {
+              if (holding) keepAlive();
+            };
+          };
+          transaction.oncomplete = () => db.close();
+          keepAlive();
+          resolve();
+        };
+      }),
+  );
+  try {
+    await page.getByRole("button", { name: "拡大", exact: true }).click();
+    await expect
+      .poll(() => page.evaluate(() => window.qaViewWriteStarted))
+      .toBe(true);
+    await activate(page, ids[0]);
+    await activate(page, ids[1]);
+    await expect(page.locator("#remaining")).toHaveText(
+      String(game.remainingIds.length),
+    );
+  } finally {
+    await page.evaluate(() => window.qaReleaseLock());
+  }
+  await expect(page.locator("#remaining")).toHaveText(
+    String(game.remainingIds.length - 2),
+  );
+  const saved = (await readProfile(page)).activeGame;
+  expect(saved.remainingIds).not.toContain(ids[0]);
+  expect(saved.remainingIds).not.toContain(ids[1]);
+  expect(saved.misses).toBe(0);
 });

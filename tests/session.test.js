@@ -42,6 +42,7 @@ function setup(read) {
       screen: "play",
       completion: null,
       busy: false,
+      pendingTaps: [],
       stale: false,
       viewState: { zoom: 2 },
       boardView: {

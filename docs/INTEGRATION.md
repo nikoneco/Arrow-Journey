@@ -6,9 +6,9 @@ Arrow Journey専用のIndexedDB `arrow-journey-local-v1` を使う。`guest` と
 
 ```js
 const store = await openStore({ validateGame: validateSavedGame });
-let profile = await store.read('guest');
+let profile = await store.read("guest");
 // profile全体を複製し、盤面・summary・clear・設定をまとめて変更する。
-profile = await store.write('guest', nextProfile, profile.revision);
+profile = await store.write("guest", nextProfile, profile.revision);
 ```
 
 `read`で未保存ならrevision 0の初期値を返す。`write`は保存済みrevisionと期待値を同一トランザクションで照合し、成功時だけrevisionを1増やす。最後の除去・成績・クリア記録・activeGameのnull化を1回のwriteへまとめる。保存が完了してから描画状態を受理する。
@@ -17,7 +17,7 @@ profile = await store.write('guest', nextProfile, profile.revision);
 
 プロファイル形式は `schemaVersion, ownerKey, revision, activeGame, summaries, clears, settings`。summaryはplayIdキーで `{playId,difficulty,misses,hintsUsed}`。clearは盤面fingerprintキーで `{boardFingerprint,playId,difficulty,misses,hintsUsed,completedAt}`。ミスとヒントの保存済み値は減少させない。集計値を保存・加算する代わりに、`aggregateStats`が重複のない記録から算出する。
 
-設定項目は `bgmEnabled,sfxEnabled,bgmVolume,sfxVolume,reducedMotion,arrowTheme`。`updateSettings(profile,patch,deviceId,now)`を使い、各項目を `{value,updatedAt,deviceId}` として記録する。今回の実装では項目ごとの更新時刻、同時刻ならdeviceIdの辞書順で統合する。仕様書の提案「クラウドの確定順」とは異なる実装定義であり、端末時計のずれが同項目の競合へ影響する。設定を再操作すると、既知の最大時刻より新しい時刻を割り当てる。
+設定項目は `bgmEnabled,sfxEnabled,bgmVolume,sfxVolume,reducedMotion,arrowTheme,colorMode`。`updateSettings(profile,patch,deviceId,now)`を使い、各項目を `{value,updatedAt,deviceId}` として記録する。今回の実装では項目ごとの更新時刻、同時刻ならdeviceIdの辞書順で統合する。仕様書の提案「クラウドの確定順」とは異なる実装定義であり、端末時計のずれが同項目の競合へ影響する。設定を再操作すると、既知の最大時刻より新しい時刻を割り当てる。
 
 ## 任意のGoogle連携
 
@@ -42,7 +42,7 @@ Firestoreの領域:
 
 - `users/{uid}/playSummaries/{playId}`：単調増加するミス・ヒント要約。
 - `users/{uid}/clears/{boardFingerprint}`：作成後不変のクリア記録。
-- `users/{uid}/preferences/app`：許可された6項目の設定（旧5項目も読取互換）。
+- `users/{uid}/preferences/app`：許可された7項目の設定（旧5/6項目も読取互換）。
 
 `firestore.rules`は本人UIDだけを許可し、不明領域・余分なフィールド・不正値・削除を拒否する。公開前に対象のArrow Journey用プロジェクトを確定し、このルールをFirestoreへ反映して、本人・別UID・未認証・不正値のエミュレータ確認と実環境確認を分けて行う。数独用プロジェクトやルールは変更しない。
 
@@ -50,11 +50,11 @@ Firestoreの領域:
 
 `gas/Code.gs`は公開読取APIの雛形。`GET ?action=health`、`meta`、`difficulties`のみ許可する。POSTはREAD_ONLY、その他のactionはUNKNOWN_ACTION。JSONPは64文字以内の単一識別子callbackだけを許可し、ドットや括弧を拒否する。トークン、ユーザー成績、管理IDは返さない。
 
-Script Propertiesに `ARROW_SPREADSHEET_ID`（管理対象シートのID）と任意の `DISTRIBUTION_VERSION` を設定する。IDをソースや公開文書へ記入しない。`DifficultyProfiles`の公開列A:Gは `difficulty,width,height,minLength,maxLength,density,profileVersion`。ヘッダー完全一致と値域を検証し、内部列をそのままJSONへ変換しない。未設定ならprofilesは空。シートの作成・変更・初期化APIは用意しない。
+Script Propertiesに `ARROW_SPREADSHEET_ID`（管理対象シートのID）と任意の `DISTRIBUTION_VERSION` を設定する。IDをソースや公開文書へ記入しない。`DifficultyProfiles`の公開列A:Hは `difficulty,width,height,minLength,maxLength,density,profileVersion,sizes`。ヘッダー完全一致と値域を検証し、内部列をそのままJSONへ変換しない。未設定ならprofilesは空。シートの作成・変更・初期化APIは用意しない。
 
 読取はAdvanced Sheets service v4の `Sheets.Spreadsheets.Values.get` を使い、OAuthスコープは `spreadsheets.readonly` のみ。`SpreadsheetApp.openById`はフル権限を要求するため使わない。manifestでAdvanced Sheetsを有効化し、Apps Script所有者が初回認可する。既存デプロイは保持して、本アプリ用の新しいデプロイを作る。
 
-`js/public-config.js`の `loadPublicConfig(url,{timeoutMs:4500})` は `{source,reason,distributionVersion,profiles}` を返す。匿名fetch、失敗時のJSONPを合計の制限時間内で試し、オフライン・未設定・不正データは `source:'bundled'` へ戻す。受理するのはGASの `/macros/s/.../exec` HTTPS URLだけ。schemaVersion、配信版、4難易度の重複、公開フィールドを検証し、engineの版・寸法・長さ上限下限・密度と一致しない値を拒否する。配信するmetadataで生成器のパラメーターを変更しない。現在の許可長は全難易度2〜30で、重み付きの長さ設定は上限下限を表すものではない。
+`js/public-config.js`の `loadPublicConfig(url,{timeoutMs:4500})` は `{source,reason,distributionVersion,profiles}` を返す。匿名fetch、失敗時のJSONPを合計の制限時間内で試し、オフライン・未設定・不正データは `source:'bundled'` へ戻す。受理するのはGASの `/macros/s/.../exec` HTTPS URLだけ。schemaVersion、配信版、4難易度の重複、公開フィールドを検証し、engineの版・旧寸法・サイズ配列・長さ上限下限・密度と一致しない値を拒否する。配信するmetadataで生成器のパラメーターを変更しない。現在の許可長は全難易度2〜30で、重み付きの長さ設定は上限下限を表すものではない。
 
 現在のゲームは端末生成で遊べるため、GAS接続はゲーム開始の必須条件にしない。管理プロジェクトへの反映、Script Properties設定、Webアプリ公開、Sheets更新はそれぞれ対象と承認範囲を確定して実施する。
 
@@ -87,6 +87,12 @@ Firestore Standardのdefaultデータベースを東京 `asia-northeast1` に本
 Googleアカウントへのログインは利用者から完了報告あり。Arrow JourneyアプリへのOAuthポップアップ選択と実同期は別の確認で、現在利用者のアカウント選択を依頼中。スマートフォン実機のタップ・音・インストール、物理的に別の端末間の同期は未確認。
 
 ## ローカル検証
+
+0.3.0: 全難易度で20/24/28/32角を生成し、同じサイズ内の候補数と依存深さで難易度を分離。GAS公開schemaは2、profileは3.0.0、sizesを追加した。表示はライト/ダーク/端末連動、矢印は4色。colorModeを含む7項目設定に対応し、旧5/6項目は読み出し値だけ補完する。元の途中盤面、revision、設定時刻を維持する。旧0.2.xのJSは新しいキーを拒否するため、新版で7項目を保存・同期した後は旧タブも「更新」または再読込する。保存データを初期化しない。
+
+消去済みセルの中心に薄いドットを描画。再開、パン・ズーム、明暗切替に追従する。PC盤面は線上・セル角・ドラッグ中をpointerで統一。保存中のタップも所有者・世代・プレイID付きのFIFOで保持し、次の矢印の操作を落とさない。画面やアカウントが変わった入力は適用しない。
+
+通常Node72件成功・Emulator専用1件skip、ローカルブラウザー14件成功。生成器は4難易度×4サイズ×100シードの1,600盤面を別の除去判定と合法順でも全消去した。表示354/390px、明暗と4色の保存、端末表示の追従、カーソル、ドット、演出中の連続操作、意図的に保存を遅らせた場合の入力、オフラインと更新ボタンを検証した。専用demo-arrow-journeyのローカルFirestore Emulatorと実SDKは29件成功。これは本番アカウントの認証・同期やスマートフォン実機の証拠には含めない。
 
 0.2.2: 角丸経路、4色arrowTheme、保存後に次の矢印を選べる並行演出を追加。旧5項目の端末設定は読み出し値だけ補完し、元データ・途中盤面・revisionを維持する。Firestoreのthemeは省略可能、存在後の削除は拒否、値は4IDに限定する。新アプリは旧クラウドへ安全に色設定を追加できる。旧0.2.1のJSは未知の設定キーを拒否するため、同じ端末の別タブで新6項目を保存した場合の最新プロファイル読込も、色が同期されたアカウントのクラウド同期も、アプリ更新が必要。元データを初期化せず「更新」または再読込で新しい版へ切り替える。
 

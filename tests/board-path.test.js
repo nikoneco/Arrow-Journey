@@ -247,3 +247,154 @@ test("same-board renders retain simultaneous removal ghosts, theme them and awai
   assert.equal(view.ghosts.size, 0);
   view.destroy();
 });
+
+test("dark mode recolors existing, hinted, moving and blocked arrows without altering geometry", async (context) => {
+  const { view, frame } = renderHost(context);
+  view.setBoard(board);
+  view.setHint("bend");
+  const originalPath = view.groups
+    .get("bend")
+    .querySelector(".arrow-body")
+    .getAttribute("d");
+  const ghostDone = view.removeArrow("straight");
+  frame(0);
+  for (const theme of ARROW_THEMES) {
+    assert.match(theme.darkInk, /^#[\da-f]{6}$/i);
+    assert.notEqual(theme.darkInk, theme.ink);
+    view.setTheme(theme.id, true);
+    for (const group of [
+      view.groups.get("bend"),
+      view.ghosts.get("straight").group,
+    ]) {
+      assert.equal(group.getAttribute("stroke"), theme.darkInk);
+      assert.equal(
+        group.querySelector(".arrow-outline").getAttribute("stroke"),
+        "#e4bc72",
+      );
+      assert.equal(
+        group.querySelector(".arrow-focus").getAttribute("stroke"),
+        "#a9c8b2",
+      );
+      assert.equal(group.querySelectorAll(".arrow-head").length, 1);
+    }
+    assert.equal(
+      view.groups.get("bend").querySelector(".arrow-body").getAttribute("d"),
+      originalPath,
+    );
+  }
+  view.setBoard(board, ["bend"], { hintId: "bend" });
+  const recreated = view.groups.get("bend");
+  assert.equal(recreated.getAttribute("stroke"), view.ink);
+  assert.equal(
+    recreated.querySelector(".arrow-outline").getAttribute("stroke"),
+    "#e4bc72",
+  );
+  assert.equal(view.ghosts.size, 1);
+  view.setTheme("ocean");
+  for (const group of [recreated, view.ghosts.get("straight").group]) {
+    assert.equal(
+      group.getAttribute("stroke"),
+      ARROW_THEMES.find((theme) => theme.id === "ocean").ink,
+    );
+    assert.equal(
+      group.querySelector(".arrow-outline").getAttribute("stroke"),
+      "#b78b3e",
+    );
+    assert.equal(
+      group.querySelector(".arrow-focus").getAttribute("stroke"),
+      "#718b78",
+    );
+  }
+  view.markBlocked("bend");
+  frame(10);
+  view.setTheme("ocean", true);
+  assert.equal(view.groups.get("bend").getAttribute("stroke"), "#e2a489");
+  frame(410);
+  assert.equal(
+    view.groups.get("bend").getAttribute("stroke"),
+    ARROW_THEMES.find((theme) => theme.id === "ocean").darkInk,
+  );
+  frame(1000);
+  await ghostDone;
+  view.destroy();
+});
+
+test("resumed boards show dots only at removed arrow cell centers below the clipped arrow layers", (context) => {
+  const { view } = renderHost(context);
+  view.setBoard(board);
+  assert.equal(view.dotLayer.children.length, 0);
+  assert.deepEqual(view.clipped.children, [
+    view.dotLayer,
+    view.staticLayer,
+    view.ghostLayer,
+  ]);
+  assert.equal(view.dotLayer.parent.parent, view.scene);
+  assert.equal(view.dotLayer.getAttribute("aria-hidden"), "true");
+  assert.equal(view.dotLayer.getAttribute("pointer-events"), "none");
+  view.setBoard(board, ["straight"]);
+  assert.deepEqual(
+    view.dotLayer.children.map((dot) => [
+      Number(dot.getAttribute("cx")),
+      Number(dot.getAttribute("cy")),
+    ]),
+    [
+      [0.5, 0.5],
+      [1.5, 0.5],
+      [1.5, 1.5],
+    ],
+  );
+  for (const dot of view.dotLayer.children) {
+    assert.equal(dot.getAttribute("r"), "0.065");
+    assert.equal(dot.getAttribute("class"), "board-empty-dot");
+  }
+  // Original never-occupied cells are not marked as removed.
+  assert.equal(view.dotLayer.children.length, board.arrows[0].cells.length);
+  view.setBoard(board, ["straight"]);
+  assert.equal(view.dotLayer.children.length, 3);
+  view.setBoard(board);
+  assert.equal(view.dotLayer.children.length, 0);
+  view.destroy();
+});
+
+test("dots follow saved removal state and theme changes without blocking taps or concurrent ghosts", async (context) => {
+  const { view, frame } = renderHost(context);
+  const taps = [];
+  view.onTap = (id) => taps.push(id);
+  view.localPoint = (x, y) => ({ x, y });
+  view.setBoard(board);
+  const first = view.removeArrow("bend");
+  assert.equal(view.dotLayer.children.length, 3);
+  assert.equal(view.ghosts.size, 1);
+  view.setBoard(board, ["straight"]);
+  assert.equal(view.dotLayer.children.length, 3);
+  assert.equal(view.ghosts.size, 1);
+  const geometry = view.dotLayer.children;
+  view.setTheme("grape", true);
+  assert.equal(view.dotLayer.getAttribute("fill"), "#7d8a81");
+  assert.equal(view.dotLayer.getAttribute("opacity"), "0.45");
+  assert.equal(view.dotLayer.children, geometry);
+  view.setTheme("ocean", false);
+  assert.equal(view.dotLayer.getAttribute("fill"), "#aab1a8");
+  view.setView({ zoom: 2, panX: -1, panY: 0 });
+  assert.equal(
+    view.scene.getAttribute("transform"),
+    "translate(-1 0) scale(2)",
+  );
+  view.tapAt(0.2, 0.5); // A removed cell containing a dot.
+  assert.deepEqual(taps, []);
+  view.tapAt(3.5, 0.5); // A remaining cell after the same pan and zoom.
+  assert.deepEqual(taps, ["straight"]);
+  const second = view.removeArrow("straight");
+  assert.equal(view.dotLayer.children.length, 5);
+  assert.equal(view.ghosts.size, 2);
+  frame(0);
+  frame(1000);
+  await Promise.all([first, second, view.whenIdle()]);
+  assert.equal(view.dotLayer.children.length, 5);
+  assert.equal(view.ghosts.size, 0);
+  view.setBoard(board, ["straight"], { reducedMotion: true });
+  await view.removeArrow("straight");
+  assert.equal(view.dotLayer.children.length, 5);
+  assert.equal(view.ghosts.size, 0);
+  view.destroy();
+});

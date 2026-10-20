@@ -2,8 +2,20 @@ import { sampleArrow } from "./engine.js";
 import { ARROW_THEMES } from "./themes.js";
 
 const NS = "http://www.w3.org/2000/svg";
-const GOLD = "#b78b3e";
-const RUST = "#a46b51";
+const ACCENT_COLORS = Object.freeze({
+  light: Object.freeze({
+    hint: "#b78b3e",
+    focus: "#718b78",
+    blocked: "#a46b51",
+    dot: "#aab1a8",
+  }),
+  dark: Object.freeze({
+    hint: "#e4bc72",
+    focus: "#a9c8b2",
+    blocked: "#e2a489",
+    dot: "#7d8a81",
+  }),
+});
 let nextClip = 0;
 
 function svgElement(name, attributes = {}) {
@@ -87,6 +99,8 @@ export class BoardView {
     this.pinch = null;
     this.listeners = [];
     this.themeId = "forest";
+    this.dark = false;
+    this.colors = ACCENT_COLORS.light;
     this.ink = ARROW_THEMES.find((theme) => theme.id === "forest").ink;
 
     this.svg = svgElement("svg", {
@@ -97,7 +111,7 @@ export class BoardView {
       "aria-label": "矢印パズル盤面",
     });
     this.svg.style.cssText =
-      "display:block;width:100%;height:100%;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab;";
+      "display:block;width:100%;height:100%;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;cursor:pointer;";
     const defs = svgElement("defs");
     this.clipId = `arrow-board-clip-${++nextClip}`;
     const clip = svgElement("clipPath", {
@@ -113,13 +127,20 @@ export class BoardView {
     defs.append(focusStyle);
     this.scene = svgElement("g");
     this.clipped = svgElement("g", { "clip-path": `url(#${this.clipId})` });
+    this.dotLayer = svgElement("g", {
+      class: "board-empty-dots",
+      "aria-hidden": "true",
+      "pointer-events": "none",
+      fill: this.colors.dot,
+      opacity: 0.45,
+    });
     this.staticLayer = svgElement("g");
     this.ghostLayer = svgElement("g", {
       class: "arrow-ghosts",
       "aria-hidden": "true",
       "pointer-events": "none",
     });
-    this.clipped.append(this.staticLayer, this.ghostLayer);
+    this.clipped.append(this.dotLayer, this.staticLayer, this.ghostLayer);
     this.scene.append(this.clipped);
     this.svg.append(defs, this.scene);
     container.append(this.svg);
@@ -195,6 +216,7 @@ export class BoardView {
       for (const [x, y] of arrow.cells)
         this.cellOwners.set(y * board.width + x, id);
     this.remaining = new Set(Array.from(remainingIds, String));
+    this.updateDots();
     this.svg.setAttribute("viewBox", `0 0 ${board.width} ${board.height}`);
     this.clipRect.setAttribute("width", board.width);
     this.clipRect.setAttribute("height", board.height);
@@ -245,7 +267,7 @@ export class BoardView {
     const outline = svgElement("path", {
       class: "arrow-outline",
       d: bodyPath,
-      stroke: GOLD,
+      stroke: this.colors.hint,
       "stroke-width": 0.28,
       opacity: 0,
     });
@@ -260,7 +282,7 @@ export class BoardView {
     const focus = svgElement("path", {
       class: "arrow-focus",
       d: bodyPath,
-      stroke: "#718b78",
+      stroke: this.colors.focus,
       "stroke-width": 0.34,
       opacity: 0,
       "pointer-events": "none",
@@ -275,16 +297,45 @@ export class BoardView {
     this.updateHints();
   }
 
-  setTheme(themeId) {
+  updateDots() {
+    if (!this.board || this.destroyed) return;
+    this.dotLayer.replaceChildren();
+    for (const [id, arrow] of this.arrows) {
+      if (this.remaining.has(id)) continue;
+      for (const [x, y] of arrow.cells)
+        this.dotLayer.append(
+          svgElement("circle", {
+            class: "board-empty-dot",
+            cx: x + 0.5,
+            cy: y + 0.5,
+            r: 0.065,
+          }),
+        );
+    }
+  }
+
+  setTheme(themeId, dark = false) {
     if (this.destroyed) return;
     const theme =
       ARROW_THEMES.find((candidate) => candidate.id === themeId) ||
       ARROW_THEMES.find((candidate) => candidate.id === "forest");
     this.themeId = theme.id;
-    this.ink = theme.ink;
+    this.dark = Boolean(dark);
+    this.colors = this.dark ? ACCENT_COLORS.dark : ACCENT_COLORS.light;
+    this.ink = this.dark ? theme.darkInk : theme.ink;
+    this.dotLayer.setAttribute("fill", this.colors.dot);
     this.updateHints();
-    for (const { group } of this.ghosts.values())
-      group.setAttribute("stroke", this.ink);
+    for (const { group } of this.ghosts.values()) this.colorArrow(group);
+  }
+
+  colorArrow(group, blocked = false) {
+    group.setAttribute("stroke", blocked ? this.colors.blocked : this.ink);
+    group
+      .querySelector(".arrow-outline")
+      .setAttribute("stroke", this.colors.hint);
+    group
+      .querySelector(".arrow-focus")
+      .setAttribute("stroke", this.colors.focus);
   }
 
   updateHints() {
@@ -294,10 +345,7 @@ export class BoardView {
         .querySelector(".arrow-outline")
         .setAttribute("opacity", hinted ? "0.9" : "0");
       const blocked = this.feedback.get(id);
-      group.setAttribute(
-        "stroke",
-        blocked && blocked.progress < 0.8 ? RUST : this.ink,
-      );
+      this.colorArrow(group, blocked && blocked.progress < 0.8);
       group.setAttribute("stroke-width", hinted ? "0.16" : "0.13");
       if (hinted) group.setAttribute("aria-description", "ヒントの矢印");
       else group.removeAttribute("aria-description");
@@ -317,7 +365,10 @@ export class BoardView {
       if (started === undefined) started = time;
       const progress = Math.min(1, (time - started) / 460);
       feedback.progress = progress;
-      group.setAttribute("stroke", progress < 0.8 ? RUST : this.ink);
+      group.setAttribute(
+        "stroke",
+        progress < 0.8 ? this.colors.blocked : this.ink,
+      );
       const offset = this.reducedMotion
         ? 0
         : Math.sin(progress * Math.PI * 6) * 0.085 * (1 - progress);
@@ -336,6 +387,7 @@ export class BoardView {
     if (this.ghosts.has(key)) return this.ghosts.get(key).promise;
     const arrow = this.arrows.get(key);
     this.remaining.delete(key);
+    this.updateDots();
     this.groups.get(key)?.remove();
     this.groups.delete(key);
     if (!arrow || !this.board || this.reducedMotion || this.destroyed)
@@ -485,7 +537,7 @@ export class BoardView {
       const now = this.localPoint(pointer.x, pointer.y);
       this.panX += now.x - old.x;
       this.panY += now.y - old.y;
-      this.svg.style.cursor = "grabbing";
+      this.svg.style.cursor = "pointer";
       this.applyView();
     }
   }
@@ -517,7 +569,7 @@ export class BoardView {
     else this.pinch = null;
     if (shouldTap) this.tapAt(event.clientX, event.clientY);
     if (!this.pointers.size) {
-      this.svg.style.cursor = "grab";
+      this.svg.style.cursor = "pointer";
       this.dragging = false;
       // Cancellation is only reset by the beginning of a fresh gesture.
     }
@@ -610,7 +662,7 @@ export class BoardView {
     }
     this.pinch = null;
     this.dragging = false;
-    this.svg.style.cursor = "grab";
+    this.svg.style.cursor = "pointer";
   }
 
   stopFeedback() {

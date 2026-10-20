@@ -1,20 +1,23 @@
 import { DIFFICULTIES, DIFFICULTY_PROFILE_VERSION } from './engine.js';
 
-const keys=['difficulty','width','height','minLength','maxLength','density','profileVersion'];
+export const PUBLIC_CONFIG_SCHEMA_VERSION = 2;
+const keys=['difficulty','width','height','minLength','maxLength','density','profileVersion','sizes'];
 const exact=(v,fields)=>v && typeof v==='object' && !Array.isArray(v) && Object.keys(v).length===fields.length && fields.every(k=>Object.hasOwn(v,k));
 const version=v=>typeof v==='string' && /^[A-Za-z0-9._-]{1,40}$/.test(v);
 let callbackSequence=0;
 export function bundledProfiles() {
-  return Object.entries(DIFFICULTIES).map(([difficulty,p])=>({difficulty,width:p.width,height:p.height,minLength:p.minLength??2,maxLength:p.maxLength??30,density:p.density,profileVersion:DIFFICULTY_PROFILE_VERSION}));
+  return Object.entries(DIFFICULTIES).map(([difficulty,p])=>({difficulty,width:p.width,height:p.height,minLength:p.minLength??2,maxLength:p.maxLength??30,density:p.density,profileVersion:DIFFICULTY_PROFILE_VERSION,sizes:[...p.sizes]}));
 }
 export function validatePublicConfig(data) {
-  if(!exact(data,['ok','schemaVersion','generationMode','distributionVersion','profiles']) || data.ok!==true || data.schemaVersion!==1 || data.generationMode!=='local' || !version(data.distributionVersion) || !Array.isArray(data.profiles) || data.profiles.length!==4) return false;
+  if(!exact(data,['ok','schemaVersion','generationMode','distributionVersion','profiles']) || data.ok!==true || data.schemaVersion!==PUBLIC_CONFIG_SCHEMA_VERSION || data.generationMode!=='local' || !version(data.distributionVersion) || !Array.isArray(data.profiles) || data.profiles.length!==4) return false;
   const canonical=bundledProfiles(), seen=new Set();
   for(const p of data.profiles) {
     if(!exact(p,keys) || seen.has(p.difficulty))return false;
     const bundled=canonical.find(v=>v.difficulty===p.difficulty);
     // Remote metadata is descriptive. It cannot change generation parameters.
-    if(!bundled || keys.some(k=>p[k]!==bundled[k]))return false;
+    if(!bundled || keys.some(k=>k==='sizes'
+      ? !Array.isArray(p.sizes) || p.sizes.length!==bundled.sizes.length || p.sizes.some((size,i)=>size!==bundled.sizes[i])
+      : p[k]!==bundled[k]))return false;
     seen.add(p.difficulty);
   }
   return true;

@@ -161,6 +161,19 @@ test('legacy saved cell paths retain their geometry and remain playable after a 
   assert.notEqual(GENERATOR_VERSION, legacy.generatorVersion);
 });
 
+test('v2 saved geometry and fingerprint remain valid without regeneration', () => {
+  // Literal cell routes from generator 2.0.0, easy / legacy-v2, encoded as y * 20 + x.
+  const paths = [[131,130,150,170,169,168,188,189],[119,99,79,59,58,38,39],[201,200],[234,214],[186,187,167,147,146,145,125,105,106,126,127,128,148,149,129,109,110,90],[55,35,34,14,15,16,17,18,19],[180,181,182,183,163,162,161],[86,85,84],[45,46,47,48,49,50,51],[222,202],[255,235,215,216,236,237,257,277,278,279],[243,244,245,246,247,248,249,269,268],[121,101,102,103,83],[256,276,275,274,254,253,233],[96,95,75,76],[221,220,240,260,280,281,261,241,242,262,282,302,301,300,320,321,322,323,324,344,345,346,366,365,364,363,343,342,341,340],[104,124,144,143,123,122,142,141],[139,138,118,98],[387,386,385],[303,283,263,264,284,285,265,266,267,287,286,306,307,308,309,329,349,350,351,371,370,369,368,388],[232,231],[211,212,213,193,194],[160,140,120,100,80,60,40,20,0,1,2,3,4],[166,165,164],[238,239,219,218],[259,258],[22,23,24,25,26,27,28,29,30],[399,379,359],[13,33,53,73,74,54],[298,299,319,318,317,337,338,339],[228,229,230,210,190,191,192,172,171,151,152,132],[174,175],[227,226,225,224,204,203,223],[252,272,273,293,292,291,271,251,250,270,290,289,288],[195,196,176,177,178,158,159,179,199,198,197,217],[384,383,382,362,361,381,380,360],[56,36,37,57,77,78],[5,6,7,8,9,10,11,31,32,12],[315,335,336,316,296,297],[295,294,314,313,312,311,310,330,331,332,352,353,333,334,354,355,356,376],[367,347,348,328,327,326,325,305,304],[173,153,133,113,93,94,114,115,135,134,154,155,156,157,137,136,116,117,97],[375,374,373,372],[209,208,207,206,205,185,184],[393,394,395,396,397,377,357,358,378,398],[82,81,61,62,63,64,65,66,67,68,69,70,71,91,111,112,92,72,52],[89,88,108,107,87],[392,391,390,389],[44,43,42,41,21]];
+  const saved = { width: 20, height: 20, rulesVersion: '1.0.0', generatorVersion: '2.0.0', difficultyProfileVersion: '2.0.0',
+    fingerprint: 'aj1-cefaf2d525077d9f3efd55c5d500da8f',
+    arrows: paths.map((path, index) => ({ id: 'a' + index.toString(36), cells: path.map((cell) => [cell % 20, Math.floor(cell / 20)]) })) };
+  const exactSave = JSON.stringify(saved);
+  assert.deepEqual(validateBoard(saved), { valid: true, errors: [] });
+  assert.equal(solveBoard(saved).solvable, true);
+  assert.equal(boardFingerprint(saved), saved.fingerprint);
+  assert.equal(JSON.stringify(saved), exactSave);
+});
+
 test('same seed reproduces exact geometry and functions preserve inputs', () => {
   const first = generateBoard('hard', '再現テスト🌙');
   const snapshot = JSON.stringify(first);
@@ -175,74 +188,101 @@ test('same seed reproduces exact geometry and functions preserve inputs', () => 
   assert.throws(() => generateBoard('easy', 'x'.repeat(1025)), RangeError);
 });
 
-test('100 seeded boards per difficulty fill the grid, stay bounded and independently solve', (context) => {
-  const summaries = [];
-  const allFingerprints = new Set();
-  for (const [difficulty, profile] of Object.entries(DIFFICULTIES)) {
-    const started = performance.now();
-    let maximumMs = 0;
-    const totals = { arrows: 0, averageLength: 0, averageBends: 0, initialRemovableRatio: 0, dependencyDepth: 0,
-      dependencyEdges: 0, meanChoices: 0, nonRectangularRatio: 0, boundingBoxInterpenetrationRatio: 0,
-      boundingBoxInterpenetrationPairs: 0, averageNeighborDiversity: 0 };
-    const quarters = [0, 0, 0, 0, 0];
-    for (let seed = 0; seed < 100; seed += 1) {
-      const point = performance.now();
-      const board = generateBoard(difficulty, `acceptance-${seed}`);
-      maximumMs = Math.max(maximumMs, performance.now() - point);
-      assert.deepEqual(validateBoard(board), { valid: true, errors: [] });
-      assert.equal(board.width, profile.width); assert.equal(board.height, profile.height);
-      assert.equal(board.rulesVersion, RULES_VERSION); assert.equal(board.generatorVersion, GENERATOR_VERSION);
-      assert.equal(board.difficultyProfileVersion, DIFFICULTY_PROFILE_VERSION);
-      assert.equal(board.fingerprint, boardFingerprint(board));
-      assert.equal(allFingerprints.has(board.fingerprint), false); allFingerprints.add(board.fingerprint);
-      assert.ok(board.generationMetrics.boardAttempts <= 8);
-      const area = board.width * board.height;
-      assert.ok(board.generationMetrics.backbiteMoves <= 8 * area * profile.mixPasses);
-      assert.ok(board.generationMetrics.cutCandidates <= 8 * (area / 2) * 2 * (board.width + board.height) * 29);
-      const occupied = new Set(board.arrows.flatMap((item) => item.cells.map(([x, y]) => `${x},${y}`)));
-      assert.equal(occupied.size, area);
-      assert.equal(board.arrows.reduce((sum, item) => sum + item.cells.length, 0), area);
-      const result = solveBoard(board), metrics = result.metrics;
-      assert.equal(result.solvable, true); assert.equal(metrics.dagSolvable, true); assert.equal(metrics.greedySolvable, true);
-      assert.equal(metrics.density, 1); assert.equal(metrics.minLength, 2); assert.equal(metrics.maxLength, 30);
-      assert.ok(metrics.totalBends > 0);
-      assert.ok(metrics.initialRemovableRatio >= profile.minInitialRatio && metrics.initialRemovableRatio <= profile.maxInitialRatio);
-      assert.ok(metrics.dependencyDepth >= profile.minDepth);
-      assert.ok(metrics.nonRectangularRatio >= profile.minNonRectangularRatio);
-      assert.ok(metrics.boundingBoxInterpenetrationRatio >= profile.minInterpenetrationRatio);
-      assert.ok(metrics.averageNeighborDiversity >= 4);
-      for (let quarter = 0; quarter < quarters.length; quarter += 1) {
-        quarters[quarter] += metrics.choicesOverTime[Math.min(metrics.arrowCount - 1, Math.floor((metrics.arrowCount - 1) * quarter / 4))];
-      }
-      assert.equal(result.order.length, board.arrows.length);
-      const remaining = board.arrows.map((item) => item.id);
-      for (const id of result.order) {
-        assert.deepEqual(independentBlockers(board, remaining, id), []);
-        remaining.splice(remaining.indexOf(id), 1);
-      }
-      assert.equal(remaining.length, 0);
-      // A second, different legal removal order cannot create a new blockage.
-      const alternative = board.arrows.map((item) => item.id);
-      while (alternative.length) {
-        const legal = alternative.filter((id) => independentBlockers(board, alternative, id).length === 0);
-        assert.ok(legal.length);
-        const chosen = legal[(seed + alternative.length) % legal.length];
-        alternative.splice(alternative.indexOf(chosen), 1);
-      }
-      totals.arrows += metrics.arrowCount;
-      for (const key of Object.keys(totals).filter((key) => key !== 'arrows')) totals[key] += metrics[key];
-    }
-    const summary = { difficulty, boards: 100, totalMs: performance.now() - started, maximumGenerationMs: maximumMs,
-      averages: Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, value / 100])),
-      choicesAtQuarters: quarters.map((value) => value / 100) };
-    summaries.push(summary);
-    context.diagnostic(JSON.stringify(summary));
+test('every difficulty shares all sizes and size selection depends only on the seed', () => {
+  const sizes = new Set();
+  for (const profile of Object.values(DIFFICULTIES)) {
+    assert.deepEqual(profile.sizes, [20, 24, 28, 32]);
+    assert.ok(Object.isFrozen(profile)); assert.ok(Object.isFrozen(profile.sizes));
   }
-  for (let i = 1; i < summaries.length; i += 1) {
-    assert.ok(summaries[i].averages.initialRemovableRatio < summaries[i - 1].averages.initialRemovableRatio - 0.03);
-    assert.ok(summaries[i].averages.dependencyDepth > summaries[i - 1].averages.dependencyDepth + 4);
-    assert.ok(summaries[i].averages.meanChoices < summaries[i - 1].averages.meanChoices);
-    assert.ok(summaries[i].averages.dependencyEdges > summaries[i - 1].averages.dependencyEdges + 30);
+  for (let seed = 0; seed < 24; seed += 1) {
+    const boards = Object.keys(DIFFICULTIES).map((difficulty) => generateBoard(difficulty, 'size-selection-' + seed));
+    const size = boards[0].width;
+    sizes.add(size);
+    for (const board of boards) {
+      assert.equal(board.width, size); assert.equal(board.height, size);
+      assert.deepEqual(board, generateBoard(board.difficulty, board.seed, { size }));
+    }
+  }
+  assert.deepEqual([...sizes].sort((a, b) => a - b), [20, 24, 28, 32]);
+  for (const size of [0, 19, 21, 64, '20', null, NaN, Infinity]) assert.throws(() => generateBoard('easy', 'invalid', { size }), RangeError);
+  for (const options of [null, [], 20]) assert.throws(() => generateBoard('easy', 'invalid', options), TypeError);
+});
+
+test('100 seeds at each size and difficulty fill the grid, independently solve and separate choice pressure', (context) => {
+  const allFingerprints = new Set();
+  for (const size of [20, 24, 28, 32]) {
+    const summaries = [];
+    for (const [difficulty, profile] of Object.entries(DIFFICULTIES)) {
+      const started = performance.now();
+      let maximumMs = 0, maximumAttempts = 0;
+      const totals = { arrowCount: 0, initialRemovable: 0, initialRemovableRatio: 0, dependencyDepth: 0, dependencyDepthRatio: 0,
+        dependencyEdges: 0, meanChoices: 0, nonRectangularRatio: 0, boundingBoxInterpenetrationRatio: 0, averageNeighborDiversity: 0 };
+      const quarters = [0, 0, 0, 0, 0];
+      for (let seed = 0; seed < 100; seed += 1) {
+        const point = performance.now();
+        const board = generateBoard(difficulty, 'acceptance-' + seed, { size });
+        maximumMs = Math.max(maximumMs, performance.now() - point);
+        maximumAttempts = Math.max(maximumAttempts, board.generationMetrics.boardAttempts);
+        assert.deepEqual(validateBoard(board), { valid: true, errors: [] });
+        assert.equal(board.width, size); assert.equal(board.height, size);
+        assert.equal(board.rulesVersion, RULES_VERSION); assert.equal(board.generatorVersion, GENERATOR_VERSION);
+        assert.equal(board.difficultyProfileVersion, DIFFICULTY_PROFILE_VERSION);
+        assert.equal(board.fingerprint, boardFingerprint(board));
+        assert.equal(allFingerprints.has(board.fingerprint), false); allFingerprints.add(board.fingerprint);
+        assert.ok(board.generationMetrics.boardAttempts <= 16);
+        const area = size * size;
+        assert.ok(board.generationMetrics.backbiteMoves <= 16 * area * profile.mixPasses);
+        assert.ok(board.generationMetrics.cutCandidates <= 16 * (area / 2) * 2 * (board.width + board.height) * 29);
+        const occupied = new Set(board.arrows.flatMap((item) => item.cells.map(([x, y]) => x + ',' + y)));
+        assert.equal(occupied.size, area);
+        assert.equal(board.arrows.reduce((sum, item) => sum + item.cells.length, 0), area);
+        const result = solveBoard(board), metrics = result.metrics;
+        assert.equal(result.solvable, true); assert.equal(metrics.dagSolvable, true); assert.equal(metrics.greedySolvable, true);
+        assert.equal(metrics.density, 1); assert.equal(metrics.minLength, 2); assert.equal(metrics.maxLength, 30);
+        assert.ok(metrics.totalBends > 0);
+        assert.ok(metrics.initialRemovable >= profile.minInitial && metrics.initialRemovable <= profile.maxInitial);
+        assert.ok(metrics.dependencyDepth >= Math.ceil(profile.minDepthRatio * metrics.arrowCount));
+        assert.ok(metrics.nonRectangularRatio >= profile.minNonRectangularRatio);
+        assert.ok(metrics.boundingBoxInterpenetrationRatio >= profile.minInterpenetrationRatio);
+        assert.ok(metrics.averageNeighborDiversity >= 4);
+        assert.equal(result.order.length, board.arrows.length);
+        const remaining = board.arrows.map((item) => item.id);
+        for (const id of result.order) {
+          assert.deepEqual(independentBlockers(board, remaining, id), []);
+          remaining.splice(remaining.indexOf(id), 1);
+        }
+        assert.equal(remaining.length, 0);
+        // A different legal branch is checked independently of the engine graph/order.
+        const alternative = board.arrows.map((item) => item.id);
+        while (alternative.length) {
+          const legal = alternative.filter((id) => independentBlockers(board, alternative, id).length === 0);
+          assert.ok(legal.length);
+          const chosen = legal[(seed + alternative.length) % legal.length];
+          alternative.splice(alternative.indexOf(chosen), 1);
+        }
+        // Exact geometry/work counters reproduce, including after rejected attempts.
+        if (seed === 0 || board.generationMetrics.boardAttempts >= 4) {
+          assert.deepEqual(board, generateBoard(difficulty, 'acceptance-' + seed, { size }));
+        }
+        for (let quarter = 0; quarter < quarters.length; quarter += 1) {
+          quarters[quarter] += metrics.choicesOverTime[Math.min(metrics.arrowCount - 1, Math.floor((metrics.arrowCount - 1) * quarter / 4))];
+        }
+        for (const key of Object.keys(totals)) totals[key] += metrics[key];
+      }
+      const summary = { size, difficulty, boards: 100, totalMs: performance.now() - started, maximumGenerationMs: maximumMs,
+        maximumAttempts, averages: Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, value / 100])),
+        choicesAtQuarters: quarters.map((value) => value / 100) };
+      summaries.push(summary);
+      context.diagnostic(JSON.stringify(summary));
+    }
+    // Compare absolute choices and relative depth at the SAME size, never across board areas.
+    for (let i = 1; i < summaries.length; i += 1) {
+      const previous = summaries[i - 1].averages, current = summaries[i].averages;
+      assert.ok(current.initialRemovable < previous.initialRemovable - 1.5);
+      assert.ok(current.meanChoices < previous.meanChoices - 0.4);
+      assert.ok(current.dependencyDepthRatio > previous.dependencyDepthRatio + 0.06);
+      assert.ok(current.dependencyDepth > previous.dependencyDepth + 2);
+    }
   }
 });
 

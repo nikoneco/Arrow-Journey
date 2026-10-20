@@ -17,7 +17,7 @@ import {
 } from "./storage.js";
 import { initializeCloud } from "./cloud.js";
 import { Soundscape } from "./audio.js";
-import { ARROW_THEMES } from "./themes.js";
+import { ARROW_THEMES, APPEARANCE_MODES } from "./themes.js";
 import { FIREBASE_CONFIG, PUBLIC_CONFIG_URL } from "./config.js";
 import { bundledProfiles, loadPublicConfig } from "./public-config.js";
 
@@ -60,6 +60,8 @@ let store,
   viewState = null,
   updateWorker = null;
 const audio = new Soundscape();
+const pendingTaps = [];
+let drainingTaps = false;
 let publicProfiles = bundledProfiles();
 const deviceId = (() => {
   try {
@@ -78,6 +80,10 @@ const settings = () =>
   Object.fromEntries(
     Object.entries(profile?.settings || {}).map(([k, v]) => [k, v.value]),
   );
+const systemColor = matchMedia("(prefers-color-scheme: dark)");
+const darkMode = () =>
+  settings().colorMode === "dark" ||
+  (settings().colorMode === "system" && systemColor.matches);
 const motion = () =>
   settings().reducedMotion ||
   matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -101,9 +107,19 @@ function failed(e) {
 function applySettings() {
   audio.configure(settings());
   const theme = settings().arrowTheme || "forest";
-  boardView?.setTheme(theme);
+  const dark = darkMode();
+  document.documentElement.dataset.colorMode = dark ? "dark" : "light";
+  boardView?.setTheme(theme, dark);
   app.querySelectorAll('[data-setting="arrowTheme"]').forEach((input) => {
     input.checked = input.value === theme;
+  });
+  const mode = app.querySelector('[data-setting="colorMode"]');
+  if (mode) mode.value = settings().colorMode || "light";
+  app.querySelectorAll("[data-swatch]").forEach((swatch) => {
+    const color = ARROW_THEMES.find(
+      (value) => value.id === swatch.dataset.swatch,
+    );
+    if (color) swatch.style.background = dark ? color.darkInk : color.ink;
   });
   document.documentElement.classList.toggle("reduce-motion", motion());
 }
@@ -138,7 +154,7 @@ function render() {
         scheduleViewSave();
       },
     });
-    boardView.setTheme(settings().arrowTheme || "forest");
+    boardView.setTheme(settings().arrowTheme || "forest", darkMode());
     boardView.setBoard(g.board, g.remainingIds, {
       hintId: g.hintId,
       reducedMotion: motion(),
@@ -169,6 +185,12 @@ function renderNotices() {
     button.onclick = () => action(button.dataset.action);
   });
 }
+function profileSizeLabel(p) {
+  const sizes = p.sizes;
+  return sizes?.length > 1
+    ? `${sizes[0]} × ${sizes[0]} 〜 ${sizes.at(-1)} × ${sizes.at(-1)}`
+    : `${p.width} × ${p.height}`;
+}
 function homeMarkup() {
   const resume = profile.activeGame;
   return `<section class="home-screen"><div class="home-content">${completion ? `<div class="completion" role="status">${icon("check")}<div><strong>クリア</strong><span>${DIFFICULTIES[completion.difficulty].name} · ミス ${completion.misses} · ヒント ${completion.hintsUsed} / 3</span></div></div>` : ""}${resume ? `<button class="resume-card" data-action="resume" ${busy || stale ? "disabled" : ""}><span class="resume-title">つづきから</span><span class="resume-meta"><strong>${DIFFICULTIES[resume.board.difficulty].name}</strong><span>残り ${resume.remainingIds.length} 本</span></span>${icon("arrow")}</button>` : ""}<section class="level-section" aria-labelledby="new-game-title"><h2 class="section-title" id="new-game-title">新しい問題</h2><div class="level-list">${Object.entries(
@@ -176,7 +198,7 @@ function homeMarkup() {
   )
     .map(
       ([k, v], i) =>
-        `<button class="level-row" data-difficulty="${k}" ${busy || stale ? "disabled" : ""}><span class="level-name">${v.name}<small>${publicProfiles.find((p) => p.difficulty === k).width} × ${publicProfiles.find((p) => p.difficulty === k).height}</small></span><span class="difficulty-dots" aria-hidden="true">${Array.from({ length: 4 }, (_, j) => `<i class="${j <= i ? "filled" : ""}"></i>`).join("")}</span>${icon("arrow")}</button>`,
+        `<button class="level-row" data-difficulty="${k}" ${busy || stale ? "disabled" : ""}><span class="level-name">${v.name}<small>${profileSizeLabel(publicProfiles.find((p) => p.difficulty === k))}</small></span><span class="difficulty-dots" aria-hidden="true">${Array.from({ length: 4 }, (_, j) => `<i class="${j <= i ? "filled" : ""}"></i>`).join("")}</span>${icon("arrow")}</button>`,
     )
     .join(
       "",
@@ -344,7 +366,42 @@ async function start() {
     }
   }
 }
-async function tap(id) {
+function tap(id) {
+  const game = profile?.activeGame;
+  if (stale || screen !== "play" || !game || !game.remainingIds.includes(id))
+    return;
+  pendingTaps.push({ id, owner, epoch, playId: game.playId });
+  void drainTaps();
+}
+async function drainTaps() {
+  if (drainingTaps) return;
+  drainingTaps = true;
+  try {
+    while (pendingTaps.length) {
+      const request = pendingTaps[0],
+        game = profile?.activeGame;
+      if (
+        request.owner !== owner ||
+        request.epoch !== epoch ||
+        request.playId !== game?.playId ||
+        screen !== "play" ||
+        stale
+      ) {
+        pendingTaps.shift();
+        continue;
+      }
+      if (busy) {
+        await new Promise((resolve) => setTimeout(resolve, 16));
+        continue;
+      }
+      pendingTaps.shift();
+      if (game.remainingIds.includes(request.id)) await performTap(request.id);
+    }
+  } finally {
+    drainingTaps = false;
+  }
+}
+async function performTap(id) {
   if (busy || stale || screen !== "play" || !profile.activeGame) return;
   busy = true;
   const token = epoch,
@@ -488,6 +545,7 @@ async function changeSettings(patch) {
 }
 async function action(name) {
   if (name === "home" && profile?.ownerKey === owner) {
+    pendingTaps.length = 0;
     screen = "home";
     render();
     return;
@@ -590,7 +648,7 @@ function modal(title, body) {
 function openHelp() {
   modal(
     "遊び方",
-    `<div class="help-diagram"><svg viewBox="0 0 240 90" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M25 65V25H145m-10-10 10 10-10 10"/><path stroke-dasharray="3 7" opacity=".35" d="M160 25h55"/><path d="m204 18 8 7-8 7" opacity=".35"/></svg></div><ol class="help-steps"><li><strong>先端の向きを見る</strong><p>先端から盤面の外まで、まっすぐな道に別の矢印がなければ抜けます。</p></li><li><strong>線のどこかをタップ</strong><p>胴体が元の経路をたどって外へ移動します。すべて抜けたらクリアです。</p></li><li><strong>ヒントと保存</strong><p>ヒントは1盤面3回。抜けなくてもゲームオーバーはありません。</p></li></ol><p class="dialog-note">ドラッグで盤面を移動。ピンチ・ホイール・＋で拡大できます。<br>途中盤面はこの端末だけに保存します。トップからいつでも再開できます。</p>`,
+    `<div class="help-diagram"><svg viewBox="0 0 240 90" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M25 65V25H145m-10-10 10 10-10 10"/><path stroke-dasharray="3 7" opacity=".35" d="M160 25h55"/><path d="m204 18 8 7-8 7" opacity=".35"/></svg></div><ol class="help-steps"><li><strong>先端の向きを見る</strong><p>先端から盤面の外まで、まっすぐな道に別の矢印がなければ抜けます。</p></li><li><strong>矢印があるマスをタップ</strong><p>胴体が元の経路をたどって外へ移動します。すべて抜けたらクリアです。</p></li><li><strong>ヒントと保存</strong><p>ヒントは1盤面3回。抜けなくてもゲームオーバーはありません。</p></li></ol><p class="dialog-note">ドラッグで盤面を移動。ピンチ・ホイール・＋で拡大できます。<br>途中盤面はこの端末だけに保存します。トップからいつでも再開できます。</p>`,
   );
 }
 function openStats() {
@@ -606,14 +664,14 @@ function openStats() {
       )
       .join(
         "",
-      )}<div><dt>累計ミス</dt><dd>${s.totalMisses}</dd></div><div><dt>ノーミスクリア</dt><dd>${s.noMissClears}</dd></div><div><dt>ノーミス率</dt><dd>${s.noMissRate === null ? "—" : Math.round(s.noMissRate * 100) + "%"}</dd></div></dl><p class="dialog-note">${owner === "guest" ? "ゲストの成績 · この端末に保存" : "ログイン中のアカウントの成績"}<br>累計ミスには、途中でやめた盤面のミスも含みます。</p>`,
+      )}<div><dt>ノーミスクリア</dt><dd>${s.noMissClears}</dd></div></dl><p class="dialog-note">${owner === "guest" ? "ゲストの成績 · この端末に保存" : "ログイン中のアカウントの成績"}</p>`,
   );
 }
 function openSettings() {
   const s = settings();
   const d = modal(
     "設定",
-    `<fieldset class="theme-picker"><legend>矢印の色</legend><div class="theme-options">${ARROW_THEMES.map((theme) => `<label class="theme-option"><input type="radio" name="arrow-theme" value="${theme.id}" data-setting="arrowTheme" ${(s.arrowTheme || "forest") === theme.id ? "checked" : ""}><span class="theme-swatch" style="background:${theme.ink}" aria-hidden="true"></span><span>${theme.label}</span></label>`).join("")}</div></fieldset><div class="settings-fields">${[
+    `<div class="appearance-row"><label for="color-mode">表示</label><select id="color-mode" data-setting="colorMode">${APPEARANCE_MODES.map((mode) => `<option value="${mode.id}" ${(s.colorMode || "light") === mode.id ? "selected" : ""}>${mode.label}</option>`).join("")}</select></div><fieldset class="theme-picker"><legend>矢印の色</legend><div class="theme-options">${ARROW_THEMES.map((theme) => `<label class="theme-option"><input type="radio" name="arrow-theme" value="${theme.id}" data-setting="arrowTheme" ${(s.arrowTheme || "forest") === theme.id ? "checked" : ""}><span class="theme-swatch" data-swatch="${theme.id}" style="background:${darkMode() ? theme.darkInk : theme.ink}" aria-hidden="true"></span><span>${theme.label}</span></label>`).join("")}</div></fieldset><div class="settings-fields">${[
       ["bgm", "BGM", ""],
       ["sfx", "効果音", ""],
     ]
@@ -623,7 +681,7 @@ function openSettings() {
       )
       .join(
         "",
-      )}<div class="setting-row motion-row"><label for="reduced-motion"><strong>動きを減らす</strong><small>矢印の演出を短くします</small></label><input class="switch" type="checkbox" id="reduced-motion" data-setting="reducedMotion" ${s.reducedMotion ? "checked" : ""}></div></div><section class="account"><h3>成績と設定の同期</h3><p>${cloud?.configured ? (owner === "guest" ? "Googleアカウントで、成績と設定をほかの端末にも。" : "ログイン中 · 途中盤面はこの端末だけに保存します。") : "Google連携は準備中です。<br>成績・設定・途中盤面は、この端末に保存されています。"}</p><button class="secondary" id="login" ${!cloud?.configured ? "disabled" : ""}>${owner === "guest" ? "Googleでログイン" : "ログアウト"}</button>${cloud?.configured && owner !== "guest" ? '<button class="text-button" id="sync">今すぐ同期</button>' : ""}<p class="sync-status" id="sync-status"></p></section><p class="dialog-note">Arrow Journey 0.2.2<br></p>`,
+      )}<div class="setting-row motion-row"><label for="reduced-motion"><strong>動きを減らす</strong><small>矢印の演出を短くします</small></label><input class="switch" type="checkbox" id="reduced-motion" data-setting="reducedMotion" ${s.reducedMotion ? "checked" : ""}></div></div><section class="account"><h3>成績と設定の同期</h3><p>${cloud?.configured ? (owner === "guest" ? "Googleアカウントで、成績と設定をほかの端末にも。" : "ログイン中 · 途中盤面はこの端末だけに保存します。") : "Google連携は準備中です。<br>成績・設定・途中盤面は、この端末に保存されています。"}</p><button class="secondary" id="login" ${!cloud?.configured ? "disabled" : ""}>${owner === "guest" ? "Googleでログイン" : "ログアウト"}</button>${cloud?.configured && owner !== "guest" ? '<button class="text-button" id="sync">今すぐ同期</button>' : ""}<p class="sync-status" id="sync-status"></p></section><p class="dialog-note">Arrow Journey 0.3.0<br></p>`,
   );
   d.querySelectorAll("[data-setting]").forEach((input) =>
     input.addEventListener("change", async () => {
@@ -722,6 +780,7 @@ async function switchUser(user) {
   const nextOwner = user ? ownerForUid(user.uid) : "guest";
   if (nextOwner === owner) return;
   const token = ++epoch;
+  pendingTaps.length = 0;
   owner = nextOwner;
   screen = "home";
   completion = null;
@@ -799,6 +858,7 @@ async function boot() {
     profile = await store.read(owner);
     applySettings();
     render();
+    systemColor.addEventListener("change", applySettings);
     // Public metadata is optional; packaged profiles keep play available offline.
     loadPublicConfig(PUBLIC_CONFIG_URL).then((result) => {
       publicProfiles = result.profiles;
@@ -806,7 +866,7 @@ async function boot() {
         const size = app.querySelector(
           `[data-difficulty="${p.difficulty}"] small`,
         );
-        if (size) size.textContent = `${p.width} × ${p.height}`;
+        if (size) size.textContent = profileSizeLabel(p);
       }
     });
     cloud = await initializeCloud(FIREBASE_CONFIG, { onUser: switchUser });

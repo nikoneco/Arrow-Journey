@@ -1,18 +1,21 @@
 /** Arrow Journey rules and deterministic generation. No browser or storage dependencies. */
 export const RULES_VERSION = '1.0.0';
-export const GENERATOR_VERSION = '2.0.0';
-export const DIFFICULTY_PROFILE_VERSION = '2.0.0';
+export const GENERATOR_VERSION = '3.0.0';
+export const DIFFICULTY_PROFILE_VERSION = '3.0.0';
 
 const MAX_DIMENSION = 64;
 const MAX_LENGTH = 30;
-const MAX_BOARD_ATTEMPTS = 8;
+const MAX_BOARD_ATTEMPTS = 16;
+const BOARD_SIZES = Object.freeze([20, 24, 28, 32]);
 
+// width/height are legacy metadata defaults; sizes defines every profile's actual range.
 export const DIFFICULTIES = Object.freeze(Object.fromEntries([
-  ['easy', { name: 'Easy', width: 20, height: 20, roots: 9, depthBias: -0.05, mixPasses: 8, minDepth: 6, minInitialRatio: 0.15, maxInitialRatio: 0.30, minNonRectangularRatio: 0.55, minInterpenetrationRatio: 0.30, lengthBands: [[5, 10, 0.45], [11, 18, 0.45], [19, 30, 0.10]] }],
-  ['normal', { name: 'Normal', width: 24, height: 24, roots: 7, depthBias: 0.4, mixPasses: 12, minDepth: 10, minInitialRatio: 0.10, maxInitialRatio: 0.20, minNonRectangularRatio: 0.60, minInterpenetrationRatio: 0.45, lengthBands: [[6, 12, 0.22], [13, 22, 0.50], [23, 30, 0.28]] }],
-  ['hard', { name: 'Hard', width: 28, height: 28, roots: 5, depthBias: 1.2, mixPasses: 16, minDepth: 14, minInitialRatio: 0.05, maxInitialRatio: 0.12, minNonRectangularRatio: 0.60, minInterpenetrationRatio: 0.50, lengthBands: [[6, 12, 0.12], [13, 22, 0.38], [23, 30, 0.50]] }],
-  ['expert', { name: 'Expert', width: 32, height: 32, roots: 3, depthBias: 2.5, mixPasses: 20, minDepth: 18, minInitialRatio: 0.025, maxInitialRatio: 0.08, minNonRectangularRatio: 0.60, minInterpenetrationRatio: 0.50, lengthBands: [[6, 12, 0.08], [13, 22, 0.27], [23, 30, 0.65]] }],
+  ['easy', { name: 'Easy', width: 20, height: 20, roots: 11, depthBias: -0.05, mixPasses: 8, minDepthRatio: 0.10, minInitial: 8, maxInitial: 14, minNonRectangularRatio: 0.55, minInterpenetrationRatio: 0.30, lengthBands: [[5, 10, 0.45], [11, 18, 0.45], [19, 30, 0.10]] }],
+  ['normal', { name: 'Normal', width: 24, height: 24, roots: 7, depthBias: 0.4, mixPasses: 12, minDepthRatio: 0.20, minInitial: 5, maxInitial: 8, minNonRectangularRatio: 0.60, minInterpenetrationRatio: 0.45, lengthBands: [[6, 12, 0.22], [13, 22, 0.50], [23, 30, 0.28]] }],
+  ['hard', { name: 'Hard', width: 28, height: 28, roots: 4, depthBias: 1.2, mixPasses: 16, minDepthRatio: 0.28, minInitial: 3, maxInitial: 5, minNonRectangularRatio: 0.60, minInterpenetrationRatio: 0.50, lengthBands: [[6, 12, 0.12], [13, 22, 0.38], [23, 30, 0.50]] }],
+  ['expert', { name: 'Expert', width: 32, height: 32, roots: 2, depthBias: 3.2, mixPasses: 20, minDepthRatio: 0.40, minInitial: 1, maxInitial: 3, minNonRectangularRatio: 0.60, minInterpenetrationRatio: 0.50, lengthBands: [[6, 12, 0.08], [13, 22, 0.27], [23, 30, 0.65]] }],
 ].map(([key, value]) => [key, Object.freeze({ ...value, density: 1, minDensity: 1, minLength: 2, maxLength: MAX_LENGTH,
+  sizes: BOARD_SIZES,
   lengthBands: Object.freeze(value.lengthBands.map(Object.freeze)) })])));
 
 const inside = (x, y, width, height) => x >= 0 && x < width && y >= 0 && y < height;
@@ -251,7 +254,7 @@ export function solveBoard(board) {
       totalBends, averageBends: totalBends / lengths.length,
       initialRemovable, initialRemovableRatio: initialRemovable / lengths.length,
       dependencyEdges: [...graph.blockers.values()].reduce((sum, ids) => sum + ids.size, 0),
-      dependencyDepth: result.depth, choicesOverTime: result.choices,
+      dependencyDepth: result.depth, dependencyDepthRatio: result.depth / lengths.length, choicesOverTime: result.choices,
       meanChoices: result.choices.reduce((sum, value) => sum + value, 0) / Math.max(1, result.choices.length),
       dagSolvable: result.solvable, greedySolvable: independent.solvable,
       ...geometryMetrics(board, structure.occupancy),
@@ -421,16 +424,20 @@ function generateCandidate(profile, random, work) {
   return { width, height, arrows };
 }
 
-/** Full-grid route mixing and legal cutting have fixed move, cut and retry limits. */
-export function generateBoard(difficulty = 'easy', seed = 'arrow-journey') {
+/** Size uses a separate, difficulty-independent seed stream; an override supports previews/tests. */
+export function generateBoard(difficulty = 'easy', seed = 'arrow-journey', options = {}) {
   if (!Object.hasOwn(DIFFICULTIES, difficulty)) throw new RangeError(`Unknown difficulty: ${String(difficulty)}`);
   if ((typeof seed !== 'string' && typeof seed !== 'number') || (typeof seed === 'number' && !Number.isFinite(seed))) {
     throw new TypeError('Seed must be a string or finite number.');
   }
   seed = String(seed);
   if (seed.length > 1024) throw new RangeError('Seed must be at most 1024 characters.');
-  const profile = DIFFICULTIES[difficulty];
-  const random = randomFromSeed(`${RULES_VERSION}|${GENERATOR_VERSION}|${DIFFICULTY_PROFILE_VERSION}|${difficulty}|${seed}`);
+  if (!options || typeof options !== 'object' || Array.isArray(options)) throw new TypeError('Generation options must be an object.');
+  const size = options.size === undefined
+    ? BOARD_SIZES[Math.floor(randomFromSeed(`${GENERATOR_VERSION}|size|${seed}`)() * BOARD_SIZES.length)] : options.size;
+  if (!BOARD_SIZES.includes(size)) throw new RangeError('Board size must be 20, 24, 28 or 32.');
+  const profile = { ...DIFFICULTIES[difficulty], width: size, height: size };
+  const random = randomFromSeed(`${RULES_VERSION}|${GENERATOR_VERSION}|${DIFFICULTY_PROFILE_VERSION}|${difficulty}|${size}|${seed}`);
   const work = { boardAttempts: 0, backbiteMoves: 0, cutCandidates: 0 };
   for (let attempt = 0; attempt < MAX_BOARD_ATTEMPTS; attempt += 1) {
     work.boardAttempts += 1;
@@ -441,8 +448,8 @@ export function generateBoard(difficulty = 'easy', seed = 'arrow-journey') {
     const solution = solveBoard(board);
     if (!solution.solvable || solution.metrics.density < profile.minDensity || solution.metrics.maxLength !== MAX_LENGTH
         || solution.metrics.totalBends < 3 || solution.metrics.minLength !== 2
-        || solution.metrics.dependencyDepth < profile.minDepth
-        || solution.metrics.initialRemovableRatio < profile.minInitialRatio || solution.metrics.initialRemovableRatio > profile.maxInitialRatio
+        || solution.metrics.dependencyDepth < Math.ceil(profile.minDepthRatio * solution.metrics.arrowCount)
+        || solution.metrics.initialRemovable < profile.minInitial || solution.metrics.initialRemovable > profile.maxInitial
         || solution.metrics.nonRectangularRatio < profile.minNonRectangularRatio
         || solution.metrics.boundingBoxInterpenetrationRatio < profile.minInterpenetrationRatio) continue;
     return {

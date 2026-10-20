@@ -1,4 +1,5 @@
 /** Public read-only metadata API. No user saves, tokens, or management IDs. */
+var PUBLIC_SCHEMA_VERSION_ = 2;
 function doGet(e) {
   var p = e && e.parameter ? e.parameter : {};
   var callback = p.callback;
@@ -6,9 +7,9 @@ function doGet(e) {
   var action = p.action || 'health';
   var data;
   try {
-    if (action === 'health') data = {ok:true,app:'Arrow Journey',schemaVersion:1};
-    else if (action === 'meta') data = {ok:true,schemaVersion:1,generationMode:'local',distributionVersion:publicVersion_()};
-    else if (action === 'difficulties') data = {ok:true,schemaVersion:1,generationMode:'local',distributionVersion:publicVersion_(),profiles:difficulties_()};
+    if (action === 'health') data = {ok:true,app:'Arrow Journey',schemaVersion:PUBLIC_SCHEMA_VERSION_};
+    else if (action === 'meta') data = {ok:true,schemaVersion:PUBLIC_SCHEMA_VERSION_,generationMode:'local',distributionVersion:publicVersion_()};
+    else if (action === 'difficulties') data = {ok:true,schemaVersion:PUBLIC_SCHEMA_VERSION_,generationMode:'local',distributionVersion:publicVersion_(),profiles:difficulties_()};
     else data = {ok:false,error:'UNKNOWN_ACTION'};
   } catch (error) { data = {ok:false,error:'UNAVAILABLE'}; }
   return output_(data,callback);
@@ -27,9 +28,16 @@ function difficulties_() {
   if (!sheetId) return [];
   // Advanced Sheets API supports the readonly OAuth scope; SpreadsheetApp.openById does not.
   // Read only a bounded public schema, even if the sheet has internal columns.
-  var rows=Sheets.Spreadsheets.Values.get(sheetId,'DifficultyProfiles!A1:G101',{valueRenderOption:'UNFORMATTED_VALUE'}).values || [];
+  var rows=Sheets.Spreadsheets.Values.get(sheetId,'DifficultyProfiles!A1:H101',{valueRenderOption:'UNFORMATTED_VALUE'}).values || [];
   if (rows.length<2) return [];
-  var header=['difficulty','width','height','minLength','maxLength','density','profileVersion'];
+  var header=['difficulty','width','height','minLength','maxLength','density','profileVersion','sizes'];
   if (!header.every(function(k,i){return rows[0][i]===k;})) throw new Error('SCHEMA');
-  return rows.slice(1).filter(function(r){ return ['easy','normal','hard','expert'].indexOf(r[0])>=0 && Number.isInteger(r[1]) && r[1]>=4 && r[1]<=64 && Number.isInteger(r[2]) && r[2]>=4 && r[2]<=64 && Number.isInteger(r[3]) && r[3]>=2 && r[3]<=30 && Number.isInteger(r[4]) && r[4]>=r[3] && r[4]<=30 && typeof r[5]==='number' && r[5]>0 && r[5]<=1 && /^[A-Za-z0-9._-]{1,40}$/.test(String(r[6])); }).map(function(r){return {difficulty:r[0],width:r[1],height:r[2],minLength:r[3],maxLength:r[4],density:r[5],profileVersion:String(r[6])};});
+  return rows.slice(1).filter(function(r){ return ['easy','normal','hard','expert'].indexOf(r[0])>=0 && Number.isInteger(r[1]) && r[1]>=4 && r[1]<=64 && Number.isInteger(r[2]) && r[2]>=4 && r[2]<=64 && Number.isInteger(r[3]) && r[3]>=2 && r[3]<=30 && Number.isInteger(r[4]) && r[4]>=r[3] && r[4]<=30 && typeof r[5]==='number' && r[5]>0 && r[5]<=1 && /^[A-Za-z0-9._-]{1,40}$/.test(String(r[6])) && sizes_(r[7])!==null; }).map(function(r){return {difficulty:r[0],width:r[1],height:r[2],minLength:r[3],maxLength:r[4],density:r[5],profileVersion:String(r[6]),sizes:sizes_(r[7])};});
+}
+function sizes_(value) {
+  if (typeof value!=='string' || value.length>64) return null;
+  var parts=value.split(','),expected=[20,24,28,32];
+  if (parts.length!==expected.length) return null;
+  var sizes=parts.map(function(part){return Number(part.trim());});
+  return sizes.every(function(size,i){return size===expected[i] && /^(20|24|28|32)$/.test(parts[i].trim());}) ? sizes : null;
 }

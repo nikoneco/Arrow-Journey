@@ -47,14 +47,15 @@ test('invalid remote record is surfaced, not overwritten or dropped',async()=>{
 });
 test('new client imports legacy five-setting cloud and adds theme without resetting existing fields',async()=>{
   const sdk=mockSdk(),cloud=await initializeCloud(config,{},sdk),legacy=createProfile('uid:alice').settings;
-  delete legacy.arrowTheme;legacy.bgmVolume={value:0.9,updatedAt:500,deviceId:'old-device'};
+  delete legacy.arrowTheme;delete legacy.colorMode;legacy.bgmVolume={value:0.9,updatedAt:500,deviceId:'old-device'};
   sdk.records.set('users/alice/preferences/app',structuredClone(legacy));
-  const p=createProfile('uid:alice');delete p.settings.arrowTheme;
+  const p=createProfile('uid:alice');delete p.settings.arrowTheme;delete p.settings.colorMode;
   const merged=await cloud.sync('uid:alice',p);
   assert.deepEqual(merged.settings.arrowTheme,{value:'forest',updatedAt:0,deviceId:'default'});
+  assert.deepEqual(merged.settings.colorMode,{value:'light',updatedAt:0,deviceId:'default'});
   assert.deepEqual(merged.settings.bgmVolume,legacy.bgmVolume);
   const stored=sdk.records.get('users/alice/preferences/app');
-  const existing=structuredClone(stored);delete existing.arrowTheme;assert.deepEqual(existing,legacy);
+  const existing=structuredClone(stored);delete existing.arrowTheme;delete existing.colorMode;assert.deepEqual(existing,legacy);
   const chosen=updateSettings(merged,{arrowTheme:'ember'},'new-device',100);
   const synced=await cloud.sync('uid:alice',chosen);assert.equal(synced.settings.arrowTheme.value,'ember');
   assert.deepEqual(await cloud.sync('uid:alice',synced),synced);
@@ -64,4 +65,20 @@ test('cloud invalid theme is surfaced and preserved rather than silently replace
   settings.arrowTheme.value='invalid-theme';sdk.records.set('users/alice/preferences/app',settings);
   await assert.rejects(cloud.sync('uid:alice',createProfile('uid:alice')),{code:'CLOUD_DATA'});
   assert.equal(sdk.records.get('users/alice/preferences/app').arrowTheme.value,'invalid-theme');
+});
+test('new client imports six-setting cloud to seven without resetting selected theme or volume',async()=>{
+  const sdk=mockSdk(),cloud=await initializeCloud(config,{},sdk);
+  const legacy=updateSettings(createProfile('uid:alice'),{arrowTheme:'grape',bgmVolume:0.8},'old-device',500).settings;delete legacy.colorMode;
+  sdk.records.set('users/alice/preferences/app',structuredClone(legacy));
+  const p=createProfile('uid:alice');delete p.settings.colorMode;
+  const imported=await cloud.sync('uid:alice',p);assert.equal(Object.keys(imported.settings).length,7);
+  assert.equal(imported.settings.colorMode.value,'light');assert.deepEqual(imported.settings.arrowTheme,legacy.arrowTheme);assert.deepEqual(imported.settings.bgmVolume,legacy.bgmVolume);
+  const synced=await cloud.sync('uid:alice',updateSettings(imported,{colorMode:'dark'},'new-device',600));
+  assert.equal(synced.settings.colorMode.value,'dark');assert.deepEqual(await cloud.sync('uid:alice',synced),synced);
+});
+test('invalid remote color mode is preserved and reported, not defaulted',async()=>{
+  const sdk=mockSdk(),cloud=await initializeCloud(config,{},sdk),settings=createProfile('uid:alice').settings;
+  settings.colorMode.value='auto';sdk.records.set('users/alice/preferences/app',settings);
+  await assert.rejects(cloud.sync('uid:alice',createProfile('uid:alice')),{code:'CLOUD_DATA'});
+  assert.equal(sdk.records.get('users/alice/preferences/app').colorMode.value,'auto');
 });
