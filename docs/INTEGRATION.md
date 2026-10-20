@@ -50,15 +50,23 @@ Firestoreの領域:
 
 `gas/Code.gs`は公開読取APIの雛形。`GET ?action=health`、`meta`、`difficulties`のみ許可する。POSTはREAD_ONLY、その他のactionはUNKNOWN_ACTION。JSONPは64文字以内の単一識別子callbackだけを許可し、ドットや括弧を拒否する。トークン、ユーザー成績、管理IDは返さない。
 
-Script Propertiesに `ARROW_SPREADSHEET_ID`（管理対象シートのID）と任意の `DISTRIBUTION_VERSION` を設定する。IDをソースや公開文書へ記入しない。`DifficultyProfiles`の公開列A:Gは `difficulty,width,height,minLength,maxLength,density,profileVersion`。ヘッダー完全一致と値域を検証し、内部列をそのままJSONへ変換しない。未設定またはタブなしならprofilesは空。シートの作成・変更・初期化APIは用意しない。
+Script Propertiesに `ARROW_SPREADSHEET_ID`（管理対象シートのID）と任意の `DISTRIBUTION_VERSION` を設定する。IDをソースや公開文書へ記入しない。`DifficultyProfiles`の公開列A:Gは `difficulty,width,height,minLength,maxLength,density,profileVersion`。ヘッダー完全一致と値域を検証し、内部列をそのままJSONへ変換しない。未設定ならprofilesは空。シートの作成・変更・初期化APIは用意しない。
+
+読取はAdvanced Sheets service v4の `Sheets.Spreadsheets.Values.get` を使い、OAuthスコープは `spreadsheets.readonly` のみ。`SpreadsheetApp.openById`はフル権限を要求するため使わない。manifestでAdvanced Sheetsを有効化し、Apps Script所有者が初回認可する。既存デプロイは保持して、本アプリ用の新しいデプロイを作る。
+
+`js/public-config.js`の `loadPublicConfig(url,{timeoutMs:4500})` は `{source,reason,distributionVersion,profiles}` を返す。匿名fetch、失敗時のJSONPを合計の制限時間内で試し、オフライン・未設定・不正データは `source:'bundled'` へ戻す。受理するのはGASの `/macros/s/.../exec` HTTPS URLだけ。schemaVersion、配信版、4難易度の重複、公開フィールドを検証し、engineの版・寸法・長さ上限下限・密度と一致しない値を拒否する。配信するmetadataで生成器のパラメーターを変更しない。現在の許可長は全難易度2〜30で、重み付きの長さ設定は上限下限を表すものではない。
 
 現在のゲームは端末生成で遊べるため、GAS接続はゲーム開始の必須条件にしない。管理プロジェクトへの反映、Script Properties設定、Webアプリ公開、Sheets更新はそれぞれ対象と承認範囲を確定して実施する。
 
-## 現在確認した環境と未設定項目
+## 初回接続の実施記録
 
-ローカルでNode.js、npm、claspを確認した。Firebase CLIはグローバルPATHに存在しない。Arrow Journey用の既存Firebase接続設定やclasp連携ファイルは確認できていない。数独はFirebase Authentication/Firestore、IndexedDB、読取専用GASの構成を参照しただけで、ファイル・接続先・資格情報をコピー・変更していない。
+2026-10-20、利用者の指定したArrow Journey用GAS・既存Google Sheetsへ接続した。事前にシート全範囲のCellDataとスクリプトを読み、ローカルの非公開`.local`へバックアップした。既存GASは空のmyFunctionだけだった。数独のファイル・接続先・資格情報はコピー・変更していない。
 
-外部接続にはArrow Journey専用FirebaseのprojectId、公開Web構成、Googleプロバイダー有効化、Firestore作成・地域、許可ドメイン、ルール反映先の確定が必要。GASには指定プロジェクトの現行ソース・Script Properties・Webアプリ実行URLの確認が必要。管理画面URLから実行URLを推測しない。本資料は外部環境の設定済み・公開済みを示さない。
+既存の「シート1」（1000行×26列）を保持し、新しい `DifficultyProfiles!A1:G5` だけに公開メタデータを作成した。4難易度は20/24/28/32角、長さ2〜30、密度1、profileVersion 2.0.0。最終版への更新はG2:G5だけを変更し、A:Fの値・書式等と元のシート全範囲が同じことを再読取で確認した。値・ヘッダー書式・列幅はネイティブAPIで確認した。Google画面上の文字収まり確認は別途扱う。
+
+Script Propertiesの接続先と配信版0.2.0を設定し、所有者が読取専用権限を認可した。独立レビュー後にAdvanced Sheetsを使う版をpushし、今回新しく作成したWebアプリデプロイだけをversion 3へ更新した。元からあった2つのデプロイは保持した。管理IDと復旧用ファイルは`.local`またはScript Propertiesだけに置き、公開実行URLはアプリの `js/config.js` から参照する。
+
+匿名HTTPでhealth/meta/difficultiesの成功、配信版0.2.0、profileVersion 2.0.0を確認した。save/delete/import/admin/initはUNKNOWN_ACTION、POSTはREAD_ONLY、正規JSONPは成功、不正callbackはGoogleの入口でHTTP400となった。公開レスポンスにはシートID・スクリプト管理ID・ユーザー成績を含めていない。実際の公開URLを使うNode版 `loadPublicConfig` も `source:'remote'` として受理した。ブラウザーのCORS・JSONP実行、Pages表示、スマートフォン、Firebase認証と同期の実証はそれぞれ独立した確認とする。
 
 公式資料: [Firestoreトランザクション](https://firebase.google.com/docs/firestore/manage-data/transactions)、[Googleログイン](https://firebase.google.com/docs/auth/web/google-signin)、[ルールのフィールド制約](https://firebase.google.com/docs/firestore/security/rules-fields)。
 
@@ -68,4 +76,4 @@ Script Propertiesに `ARROW_SPREADSHEET_ID`（管理対象シートのID）と�
 
 ルール実行試験は `tests/cloud.rules.test.js`。ローカルFirestore Emulatorを専用の `demo-arrow-journey` で127.0.0.1に起動し、`FIRESTORE_EMULATOR_HOST=127.0.0.1:<port>`を指定する。`@firebase/rules-unit-testing`がプロジェクトにない場合、`ARROW_RULES_TEST_MODULE`へ既存の同パッケージのエントリーファイル絶対パスを指定できる。エミュレータ未指定の通常テストではこの1件だけ明示的にskipする。本番プロジェクトを指定しない。
 
-初回実装では、ローカルのFirestore Emulator v1.22.0とOpenJDK 21を127.0.0.1:8197へ一時起動し、ルール評価と実SDK統合を含む19テストが成功した。本人・別UID・未認証、summary減少・ID変更・盤面混入、clearの不変性、設定の型・範囲・時刻競合を実際のルール評価で確認し、cloud.jsの実modular SDKトランザクションによる再送も確認した。終了後にエミュレータを停止し、8197の待受がないことを確認した。実FirebaseプロジェクトのGoogle認証・ルール反映、GAS実行URL・シートの実読取、スマートフォン認証は未確認。
+初回実装では、ローカルのFirestore Emulator v1.22.0とOpenJDK 21を127.0.0.1:8197へ一時起動し、ルール評価と実SDK統合を含む19テストが成功した。本人・別UID・未認証、summary減少・ID変更・盤面混入、clearの不変性、設定の型・範囲・時刻競合を実際のルール評価で確認し、cloud.jsの実modular SDKトランザクションによる再送も確認した。終了後にエミュレータを停止し、8197の待受がないことを確認した。GAS公開・シート実読取の追加検証は上の接続記録に記載している。実FirebaseのGoogle認証・同期とスマートフォン認証は、このエミュレーター検証に含めない。

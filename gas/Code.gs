@@ -8,7 +8,7 @@ function doGet(e) {
   try {
     if (action === 'health') data = {ok:true,app:'Arrow Journey',schemaVersion:1};
     else if (action === 'meta') data = {ok:true,schemaVersion:1,generationMode:'local',distributionVersion:publicVersion_()};
-    else if (action === 'difficulties') data = {ok:true,profiles:difficulties_()};
+    else if (action === 'difficulties') data = {ok:true,schemaVersion:1,generationMode:'local',distributionVersion:publicVersion_(),profiles:difficulties_()};
     else data = {ok:false,error:'UNKNOWN_ACTION'};
   } catch (error) { data = {ok:false,error:'UNAVAILABLE'}; }
   return output_(data,callback);
@@ -25,10 +25,10 @@ function publicVersion_() {
 function difficulties_() {
   var sheetId=PropertiesService.getScriptProperties().getProperty('ARROW_SPREADSHEET_ID');
   if (!sheetId) return [];
-  var sheet=SpreadsheetApp.openById(sheetId).getSheetByName('DifficultyProfiles');
-  if (!sheet || sheet.getLastRow()<2) return [];
+  // Advanced Sheets API supports the readonly OAuth scope; SpreadsheetApp.openById does not.
   // Read only a bounded public schema, even if the sheet has internal columns.
-  var rows=sheet.getRange(1,1,Math.min(sheet.getLastRow(),101),7).getValues();
+  var rows=Sheets.Spreadsheets.Values.get(sheetId,'DifficultyProfiles!A1:G101',{valueRenderOption:'UNFORMATTED_VALUE'}).values || [];
+  if (rows.length<2) return [];
   var header=['difficulty','width','height','minLength','maxLength','density','profileVersion'];
   if (!header.every(function(k,i){return rows[0][i]===k;})) throw new Error('SCHEMA');
   return rows.slice(1).filter(function(r){ return ['easy','normal','hard','expert'].indexOf(r[0])>=0 && Number.isInteger(r[1]) && r[1]>=4 && r[1]<=64 && Number.isInteger(r[2]) && r[2]>=4 && r[2]<=64 && Number.isInteger(r[3]) && r[3]>=2 && r[3]<=30 && Number.isInteger(r[4]) && r[4]>=r[3] && r[4]<=30 && typeof r[5]==='number' && r[5]>0 && r[5]<=1 && /^[A-Za-z0-9._-]{1,40}$/.test(String(r[6])); }).map(function(r){return {difficulty:r[0],width:r[1],height:r[2],minLength:r[3],maxLength:r[4],density:r[5],profileVersion:String(r[6])};});

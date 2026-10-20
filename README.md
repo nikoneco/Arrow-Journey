@@ -43,12 +43,12 @@ npm run test:e2e
 
 ## クラウドと公開の状態
 
-2026-10-20: ゲーム本体・端末保存・オフラインはローカル実装済み。Firebase専用環境は未作成で、`js/config.js` は未接続。設定画面でもGoogle連携が未設定であることを表示する。実アカウントでのGoogleログイン・複数端末同期、GAS配信、GitHub Pages公開、iPhone/Android実機は未確認。
+0.2.0。公開先: [Arrow Journey PWA](https://nikoneco.github.io/Arrow-Journey/)。生成器2.0.0で矢印の入り組み方と依存関係を強化。公開・認証・同期の確認記録は [INTEGRATION.md](docs/INTEGRATION.md) に記載する。iPhone/Android実機の確認は別途必要。
 
-- Firebase Authentication / Firestoreの接続処理・UID別ルール・同期テストを用意。途中盤面は送信しない。
-- `gas/` は公開読取API。現在は端末生成のためゲーム開始にGAS接続を要求しない。
-- 公開対象候補: `nikoneco/Arrow-Journey` のGitHub Pages。manifestのIDは `/Arrow-Journey/`。数独の `/Sudoku/` と既存ルートIDは変更しない。
-- `.github/workflows/pages.yml` はmainへのpushまたは手動実行で `dist/` を公開する。新規公開の対象と承認、PagesのActions設定を確認してから使用する。
+- Arrow Journey専用FirebaseをSparkプランで作成。Google認証・本人UID別のFirestoreルールを設定。途中盤面は送信しない。
+- `gas/` は公開読取API。実Sheetの4難易度metadataを匿名配信し、接続失敗時は同梱値を使う。ゲーム開始にGAS接続を要求しない。
+- `nikoneco/Arrow-Journey` のGitHub Pages。manifestのIDは `/Arrow-Journey/`。数独の `/Sudoku/` と既存ルートIDは変更しない。
+- `.github/workflows/pages.yml` はmainへのpushまたは手動実行で `dist/` を公開する。現在の依頼で新規公開まで承認済み。
 - 管理ID、認証情報、接続先の完全仕様書は公開ソースへ追加しない。
 
 仕様と実装判断: [IMPLEMENTATION.md](docs/IMPLEMENTATION.md)。外部接続と保存契約: [INTEGRATION.md](docs/INTEGRATION.md)。

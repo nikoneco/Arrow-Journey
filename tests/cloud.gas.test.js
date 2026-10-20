@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 test('GAS only allows bounded public reads and safe JSONP; POST/admin never write',async()=>{
   const code=await readFile(new URL('../gas/Code.gs',import.meta.url),'utf8');let reads=0;
-  const context=vm.createContext({ContentService:{MimeType:{JAVASCRIPT:'js',JSON:'json'},createTextOutput:(text)=>({text,setMimeType(mime){this.mime=mime;return this;}})},PropertiesService:{getScriptProperties:()=>({getProperty:(key)=>key==='ARROW_SPREADSHEET_ID'?'not-public':null})},SpreadsheetApp:{openById:()=>{reads++;return {getSheetByName:()=>null};}}});
+  const context=vm.createContext({ContentService:{MimeType:{JAVASCRIPT:'js',JSON:'json'},createTextOutput:(text)=>({text,setMimeType(mime){this.mime=mime;return this;}})},PropertiesService:{getScriptProperties:()=>({getProperty:(key)=>key==='ARROW_SPREADSHEET_ID'?'not-public':null})},Sheets:{Spreadsheets:{Values:{get:()=>{reads++;return {values:[]};}}}}});
   vm.runInContext(code,context);
   for(const action of ['init','save','delete','import','admin','unknown'])assert.equal(JSON.parse(context.doGet({parameter:{action}}).text).error,'UNKNOWN_ACTION');
   assert.equal(JSON.parse(context.doPost().text).error,'READ_ONLY');assert.equal(reads,0);

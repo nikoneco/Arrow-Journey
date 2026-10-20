@@ -2,5 +2,7 @@
   "timeZone": "Asia/Tokyo",
   "exceptionLogging": "STACKDRIVER",
   "runtimeVersion": "V8",
-  "oauthScopes": ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+  "dependencies": {"enabledAdvancedServices":[{"userSymbol":"Sheets","version":"v4","serviceId":"sheets"}]},
+  "oauthScopes": ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+  "webapp": {"executeAs":"USER_DEPLOYING","access":"ANYONE_ANONYMOUS"}
 }

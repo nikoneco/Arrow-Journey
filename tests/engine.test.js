@@ -133,6 +133,34 @@ test('fingerprints canonical geometry rather than IDs, enumeration or metadata',
   assert.match(boardFingerprint(source), /^aj1-[0-9a-f]{32}$/);
 });
 
+test('metrics distinguish paths winding through one another from rectangular tiles', () => {
+  const board = boardOf([
+    arrow('a', [[0, 0], [1, 0], [2, 0], [3, 0], [3, 1], [3, 2], [2, 2], [1, 2]]),
+    arrow('b', [[2, 1], [1, 1], [0, 1], [0, 2], [0, 3], [1, 3], [2, 3]]),
+  ], 4, 4);
+  const { solvable, metrics } = solveBoard(board);
+  assert.equal(solvable, true);
+  assert.equal(metrics.nonRectangularRatio, 1);
+  assert.equal(metrics.boundingBoxOverlapPairs, 1);
+  assert.equal(metrics.boundingBoxInterpenetrationPairs, 1);
+  assert.equal(metrics.boundingBoxInterpenetrationRatio, 1);
+  assert.equal(metrics.averageNeighborDiversity, 1);
+  assert.equal(metrics.dependencyDepth, 2);
+});
+
+test('legacy saved cell paths retain their geometry and remain playable after a generator update', () => {
+  const legacy = { ...boardOf([arrow('a', [[0, 0], [1, 0]]), arrow('b', [[3, 0], [4, 0]])]),
+    difficulty: 'easy', seed: 'legacy', rulesVersion: '1.0.0', generatorVersion: '1.0.0', difficultyProfileVersion: '1.0.0' };
+  const snapshot = JSON.stringify(legacy);
+  assert.deepEqual(validateBoard(legacy), { valid: true, errors: [] });
+  assert.equal(solveBoard(legacy).solvable, true);
+  assert.deepEqual(getRemovable(legacy, ['a', 'b']), ['b']);
+  assert.equal(canRemove(legacy, ['a'], 'a').allowed, true);
+  assert.equal(JSON.stringify(legacy), snapshot);
+  assert.equal(RULES_VERSION, legacy.rulesVersion);
+  assert.notEqual(GENERATOR_VERSION, legacy.generatorVersion);
+});
+
 test('same seed reproduces exact geometry and functions preserve inputs', () => {
   const first = generateBoard('hard', '再現テスト🌙');
   const snapshot = JSON.stringify(first);
@@ -153,7 +181,10 @@ test('100 seeded boards per difficulty fill the grid, stay bounded and independe
   for (const [difficulty, profile] of Object.entries(DIFFICULTIES)) {
     const started = performance.now();
     let maximumMs = 0;
-    const totals = { arrows: 0, averageLength: 0, averageBends: 0, initialRemovableRatio: 0, dependencyDepth: 0 };
+    const totals = { arrows: 0, averageLength: 0, averageBends: 0, initialRemovableRatio: 0, dependencyDepth: 0,
+      dependencyEdges: 0, meanChoices: 0, nonRectangularRatio: 0, boundingBoxInterpenetrationRatio: 0,
+      boundingBoxInterpenetrationPairs: 0, averageNeighborDiversity: 0 };
+    const quarters = [0, 0, 0, 0, 0];
     for (let seed = 0; seed < 100; seed += 1) {
       const point = performance.now();
       const board = generateBoard(difficulty, `acceptance-${seed}`);
@@ -164,12 +195,25 @@ test('100 seeded boards per difficulty fill the grid, stay bounded and independe
       assert.equal(board.difficultyProfileVersion, DIFFICULTY_PROFILE_VERSION);
       assert.equal(board.fingerprint, boardFingerprint(board));
       assert.equal(allFingerprints.has(board.fingerprint), false); allFingerprints.add(board.fingerprint);
-      assert.ok(board.generationMetrics.boardAttempts <= 4);
-      assert.ok(board.generationMetrics.tiles <= 4 * board.width * board.height / 2);
+      assert.ok(board.generationMetrics.boardAttempts <= 8);
+      const area = board.width * board.height;
+      assert.ok(board.generationMetrics.backbiteMoves <= 8 * area * profile.mixPasses);
+      assert.ok(board.generationMetrics.cutCandidates <= 8 * (area / 2) * 2 * (board.width + board.height) * 29);
+      const occupied = new Set(board.arrows.flatMap((item) => item.cells.map(([x, y]) => `${x},${y}`)));
+      assert.equal(occupied.size, area);
+      assert.equal(board.arrows.reduce((sum, item) => sum + item.cells.length, 0), area);
       const result = solveBoard(board), metrics = result.metrics;
       assert.equal(result.solvable, true); assert.equal(metrics.dagSolvable, true); assert.equal(metrics.greedySolvable, true);
       assert.equal(metrics.density, 1); assert.equal(metrics.minLength, 2); assert.equal(metrics.maxLength, 30);
       assert.ok(metrics.totalBends > 0);
+      assert.ok(metrics.initialRemovableRatio >= profile.minInitialRatio && metrics.initialRemovableRatio <= profile.maxInitialRatio);
+      assert.ok(metrics.dependencyDepth >= profile.minDepth);
+      assert.ok(metrics.nonRectangularRatio >= profile.minNonRectangularRatio);
+      assert.ok(metrics.boundingBoxInterpenetrationRatio >= profile.minInterpenetrationRatio);
+      assert.ok(metrics.averageNeighborDiversity >= 4);
+      for (let quarter = 0; quarter < quarters.length; quarter += 1) {
+        quarters[quarter] += metrics.choicesOverTime[Math.min(metrics.arrowCount - 1, Math.floor((metrics.arrowCount - 1) * quarter / 4))];
+      }
       assert.equal(result.order.length, board.arrows.length);
       const remaining = board.arrows.map((item) => item.id);
       for (const id of result.order) {
@@ -185,17 +229,20 @@ test('100 seeded boards per difficulty fill the grid, stay bounded and independe
         const chosen = legal[(seed + alternative.length) % legal.length];
         alternative.splice(alternative.indexOf(chosen), 1);
       }
-      totals.arrows += metrics.arrowCount; totals.averageLength += metrics.averageLength; totals.averageBends += metrics.averageBends;
-      totals.initialRemovableRatio += metrics.initialRemovableRatio; totals.dependencyDepth += metrics.dependencyDepth;
+      totals.arrows += metrics.arrowCount;
+      for (const key of Object.keys(totals).filter((key) => key !== 'arrows')) totals[key] += metrics[key];
     }
     const summary = { difficulty, boards: 100, totalMs: performance.now() - started, maximumGenerationMs: maximumMs,
-      averages: Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, value / 100])) };
+      averages: Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, value / 100])),
+      choicesAtQuarters: quarters.map((value) => value / 100) };
     summaries.push(summary);
     context.diagnostic(JSON.stringify(summary));
   }
   for (let i = 1; i < summaries.length; i += 1) {
-    assert.ok(summaries[i].averages.averageLength > summaries[i - 1].averages.averageLength + 2);
-    assert.ok(summaries[i].averages.averageBends > summaries[i - 1].averages.averageBends + 0.5);
+    assert.ok(summaries[i].averages.initialRemovableRatio < summaries[i - 1].averages.initialRemovableRatio - 0.03);
+    assert.ok(summaries[i].averages.dependencyDepth > summaries[i - 1].averages.dependencyDepth + 4);
+    assert.ok(summaries[i].averages.meanChoices < summaries[i - 1].averages.meanChoices);
+    assert.ok(summaries[i].averages.dependencyEdges > summaries[i - 1].averages.dependencyEdges + 30);
   }
 });
 

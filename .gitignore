@@ -6,3 +6,4 @@ dist/
 .firebase/
 *-debug.log
 .qa/
+.local/

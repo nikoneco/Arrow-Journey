@@ -17,7 +17,8 @@ import {
 } from "./storage.js";
 import { initializeCloud } from "./cloud.js";
 import { Soundscape } from "./audio.js";
-import { FIREBASE_CONFIG } from "./config.js";
+import { FIREBASE_CONFIG, PUBLIC_CONFIG_URL } from "./config.js";
+import { bundledProfiles, loadPublicConfig } from "./public-config.js";
 
 const app = document.querySelector("#app");
 const icon = (name) => {
@@ -58,6 +59,7 @@ let store,
   viewState = null,
   updateWorker = null;
 const audio = new Soundscape();
+let publicProfiles = bundledProfiles();
 const deviceId = (() => {
   try {
     const key = "arrow-journey-device";
@@ -167,7 +169,7 @@ function homeMarkup() {
   )
     .map(
       ([k, v], i) =>
-        `<button class="level-row" data-difficulty="${k}" ${busy || stale ? "disabled" : ""}><span class="level-name">${v.name}<small>${v.width} × ${v.height}</small></span><span class="difficulty-dots" aria-hidden="true">${Array.from({ length: 4 }, (_, j) => `<i class="${j <= i ? "filled" : ""}"></i>`).join("")}</span>${icon("arrow")}</button>`,
+        `<button class="level-row" data-difficulty="${k}" ${busy || stale ? "disabled" : ""}><span class="level-name">${v.name}<small>${publicProfiles.find((p) => p.difficulty === k).width} × ${publicProfiles.find((p) => p.difficulty === k).height}</small></span><span class="difficulty-dots" aria-hidden="true">${Array.from({ length: 4 }, (_, j) => `<i class="${j <= i ? "filled" : ""}"></i>`).join("")}</span>${icon("arrow")}</button>`,
     )
     .join(
       "",
@@ -528,7 +530,8 @@ async function action(name) {
 }
 async function applyUpdate() {
   if (busy || !updateWorker) return;
-  const token = epoch;
+  const token = epoch,
+    worker = updateWorker;
   busy = true;
   renderNotices();
   clearTimeout(saveViewTimer);
@@ -539,12 +542,20 @@ async function applyUpdate() {
       await persist(next);
     }
     if (token !== epoch) return;
+    // Another tab may have activated this worker while we were saving.
+    if (
+      worker.state === "activated" ||
+      navigator.serviceWorker.controller === worker
+    ) {
+      location.reload();
+      return;
+    }
     navigator.serviceWorker.addEventListener(
       "controllerchange",
       () => location.reload(),
       { once: true },
     );
-    updateWorker.postMessage("SKIP_WAITING");
+    worker.postMessage("SKIP_WAITING");
   } catch (e) {
     if (token === epoch) {
       busy = false;
@@ -603,7 +614,7 @@ function openSettings() {
       )
       .join(
         "",
-      )}<div class="setting-row motion-row"><label for="reduced-motion"><strong>動きを減らす</strong><small>矢印の演出を短くします</small></label><input class="switch" type="checkbox" id="reduced-motion" data-setting="reducedMotion" ${s.reducedMotion ? "checked" : ""}></div></div><section class="account"><h3>成績と設定の同期</h3><p>${cloud?.configured ? (owner === "guest" ? "Googleアカウントで、成績と設定をほかの端末にも。" : "ログイン中 · 途中盤面はこの端末だけに保存します。") : "Google連携は準備中です。<br>成績・設定・途中盤面は、この端末に保存されています。"}</p><button class="secondary" id="login" ${!cloud?.configured ? "disabled" : ""}>${owner === "guest" ? "Googleでログイン" : "ログアウト"}</button>${cloud?.configured && owner !== "guest" ? '<button class="text-button" id="sync">今すぐ同期</button>' : ""}<p class="sync-status" id="sync-status"></p></section><p class="dialog-note">Arrow Journey 0.1.0<br></p>`,
+      )}<div class="setting-row motion-row"><label for="reduced-motion"><strong>動きを減らす</strong><small>矢印の演出を短くします</small></label><input class="switch" type="checkbox" id="reduced-motion" data-setting="reducedMotion" ${s.reducedMotion ? "checked" : ""}></div></div><section class="account"><h3>成績と設定の同期</h3><p>${cloud?.configured ? (owner === "guest" ? "Googleアカウントで、成績と設定をほかの端末にも。" : "ログイン中 · 途中盤面はこの端末だけに保存します。") : "Google連携は準備中です。<br>成績・設定・途中盤面は、この端末に保存されています。"}</p><button class="secondary" id="login" ${!cloud?.configured ? "disabled" : ""}>${owner === "guest" ? "Googleでログイン" : "ログアウト"}</button>${cloud?.configured && owner !== "guest" ? '<button class="text-button" id="sync">今すぐ同期</button>' : ""}<p class="sync-status" id="sync-status"></p></section><p class="dialog-note">Arrow Journey 0.2.0<br></p>`,
   );
   d.querySelectorAll("[data-setting]").forEach((input) =>
     input.addEventListener("change", async () => {
@@ -775,6 +786,16 @@ async function boot() {
     profile = await store.read(owner);
     applySettings();
     render();
+    // Public metadata is optional; packaged profiles keep play available offline.
+    loadPublicConfig(PUBLIC_CONFIG_URL).then((result) => {
+      publicProfiles = result.profiles;
+      for (const p of publicProfiles) {
+        const size = app.querySelector(
+          `[data-difficulty="${p.difficulty}"] small`,
+        );
+        if (size) size.textContent = `${p.width} × ${p.height}`;
+      }
+    });
     cloud = await initializeCloud(FIREBASE_CONFIG, { onUser: switchUser });
     window.addEventListener("online", scheduleSync);
     document.addEventListener("visibilitychange", () => {
@@ -783,6 +804,23 @@ async function boot() {
     if ("serviceWorker" in navigator && import.meta.env.PROD) {
       try {
         const reg = await navigator.serviceWorker.register("./sw.js");
+        const reportClient = () =>
+          navigator.serviceWorker.controller?.postMessage({
+            type: "CLIENT_READY",
+            script: import.meta.url,
+          });
+        navigator.serviceWorker.addEventListener("controllerchange", () => {
+          reportClient();
+          updateWorker = null;
+          renderNotices();
+        });
+        document.addEventListener("visibilitychange", () => {
+          if (!document.hidden) {
+            reportClient();
+            reg.update().catch(() => {});
+          }
+        });
+        navigator.serviceWorker.ready.then(reportClient);
         const offer = () => {
           if (reg.waiting && navigator.serviceWorker.controller) {
             updateWorker = reg.waiting;

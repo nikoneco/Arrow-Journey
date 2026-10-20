@@ -1,18 +1,19 @@
 /** Arrow Journey rules and deterministic generation. No browser or storage dependencies. */
 export const RULES_VERSION = '1.0.0';
-export const GENERATOR_VERSION = '1.0.0';
-export const DIFFICULTY_PROFILE_VERSION = '1.0.0';
+export const GENERATOR_VERSION = '2.0.0';
+export const DIFFICULTY_PROFILE_VERSION = '2.0.0';
 
 const MAX_DIMENSION = 64;
 const MAX_LENGTH = 30;
-const MAX_BOARD_ATTEMPTS = 4;
+const MAX_BOARD_ATTEMPTS = 8;
 
 export const DIFFICULTIES = Object.freeze(Object.fromEntries([
-  ['easy', { name: 'Easy', width: 20, height: 20, density: 1, minDensity: 1, bandHeights: [2, 3], lengthBands: [[4, 7, 0.42], [8, 12, 0.46], [13, 18, 0.12]] }],
-  ['normal', { name: 'Normal', width: 24, height: 24, density: 1, minDensity: 1, bandHeights: [3, 4], lengthBands: [[6, 10, 0.20], [11, 18, 0.54], [19, 27, 0.26]] }],
-  ['hard', { name: 'Hard', width: 28, height: 28, density: 1, minDensity: 1, bandHeights: [4, 5], lengthBands: [[8, 12, 0.14], [13, 21, 0.36], [22, 30, 0.50]] }],
-  ['expert', { name: 'Expert', width: 32, height: 32, density: 1, minDensity: 1, bandHeights: [5, 6], lengthBands: [[10, 15, 0.10], [16, 23, 0.28], [24, 30, 0.62]] }],
-].map(([key, value]) => [key, Object.freeze({ ...value, bandHeights: Object.freeze(value.bandHeights), lengthBands: Object.freeze(value.lengthBands.map(Object.freeze)) })])));
+  ['easy', { name: 'Easy', width: 20, height: 20, roots: 9, depthBias: -0.05, mixPasses: 8, minDepth: 6, minInitialRatio: 0.15, maxInitialRatio: 0.30, minNonRectangularRatio: 0.55, minInterpenetrationRatio: 0.30, lengthBands: [[5, 10, 0.45], [11, 18, 0.45], [19, 30, 0.10]] }],
+  ['normal', { name: 'Normal', width: 24, height: 24, roots: 7, depthBias: 0.4, mixPasses: 12, minDepth: 10, minInitialRatio: 0.10, maxInitialRatio: 0.20, minNonRectangularRatio: 0.60, minInterpenetrationRatio: 0.45, lengthBands: [[6, 12, 0.22], [13, 22, 0.50], [23, 30, 0.28]] }],
+  ['hard', { name: 'Hard', width: 28, height: 28, roots: 5, depthBias: 1.2, mixPasses: 16, minDepth: 14, minInitialRatio: 0.05, maxInitialRatio: 0.12, minNonRectangularRatio: 0.60, minInterpenetrationRatio: 0.50, lengthBands: [[6, 12, 0.12], [13, 22, 0.38], [23, 30, 0.50]] }],
+  ['expert', { name: 'Expert', width: 32, height: 32, roots: 3, depthBias: 2.5, mixPasses: 20, minDepth: 18, minInitialRatio: 0.025, maxInitialRatio: 0.08, minNonRectangularRatio: 0.60, minInterpenetrationRatio: 0.50, lengthBands: [[6, 12, 0.08], [13, 22, 0.27], [23, 30, 0.65]] }],
+].map(([key, value]) => [key, Object.freeze({ ...value, density: 1, minDensity: 1, minLength: 2, maxLength: MAX_LENGTH,
+  lengthBands: Object.freeze(value.lengthBands.map(Object.freeze)) })])));
 
 const inside = (x, y, width, height) => x >= 0 && x < width && y >= 0 && y < height;
 const coordinateKey = (x, y) => `${x},${y}`;
@@ -173,6 +174,44 @@ function countBends(cells) {
   return bends;
 }
 
+function geometryMetrics(board, occupancy) {
+  const boxes = board.arrows.map((arrow) => {
+    const xs = arrow.cells.map(([x]) => x), ys = arrow.cells.map(([, y]) => y);
+    return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+  });
+  const contains = (box, [x, y]) => x >= box.minX && x <= box.maxX && y >= box.minY && y <= box.maxY;
+  let nonRectangularArrowCount = 0, boundingBoxOverlapPairs = 0, boundingBoxInterpenetrationPairs = 0;
+  const interpenetrating = new Set();
+  let totalNeighborDiversity = 0;
+  for (let i = 0; i < board.arrows.length; i += 1) {
+    const arrow = board.arrows[i], box = boxes[i];
+    if ((box.maxX - box.minX + 1) * (box.maxY - box.minY + 1) > arrow.cells.length) nonRectangularArrowCount += 1;
+    const neighbors = new Set();
+    for (const [x, y] of arrow.cells) {
+      for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) {
+        const owner = occupancy.get(coordinateKey(nx, ny));
+        if (owner !== undefined && owner !== arrow.id) neighbors.add(owner);
+      }
+    }
+    totalNeighborDiversity += neighbors.size;
+    for (let j = i + 1; j < board.arrows.length; j += 1) {
+      const other = boxes[j];
+      if (box.maxX < other.minX || other.maxX < box.minX || box.maxY < other.minY || other.maxY < box.minY) continue;
+      boundingBoxOverlapPairs += 1;
+      if (arrow.cells.some((point) => contains(other, point)) && board.arrows[j].cells.some((point) => contains(box, point))) {
+        boundingBoxInterpenetrationPairs += 1;
+        interpenetrating.add(i); interpenetrating.add(j);
+      }
+    }
+  }
+  return {
+    nonRectangularArrowCount, nonRectangularRatio: nonRectangularArrowCount / board.arrows.length,
+    boundingBoxOverlapPairs, boundingBoxInterpenetrationPairs,
+    boundingBoxInterpenetrationRatio: interpenetrating.size / board.arrows.length,
+    averageNeighborDiversity: totalNeighborDiversity / board.arrows.length,
+  };
+}
+
 /** A second solver scans cell paths directly, without the occupancy map or dependency graph. */
 function directGreedyRemoval(board) {
   const remaining = board.arrows.slice();
@@ -215,6 +254,7 @@ export function solveBoard(board) {
       dependencyDepth: result.depth, choicesOverTime: result.choices,
       meanChoices: result.choices.reduce((sum, value) => sum + value, 0) / Math.max(1, result.choices.length),
       dagSolvable: result.solvable, greedySolvable: independent.solvable,
+      ...geometryMetrics(board, structure.occupancy),
     },
   };
 }
@@ -264,103 +304,124 @@ function chooseLength(profile, random) {
   return MAX_LENGTH;
 }
 
-/** Makes a full rectangular Hamiltonian path whose final step points outward. */
-function tilePath(tile, direction, random) {
-  const { x, y, width, height } = tile;
-  const cells = [];
-  const reverseLanes = random() < 0.5;
-  if (direction === 'left' || direction === 'right') {
-    for (let lane = 0; lane < height; lane += 1) {
-      const py = y + (reverseLanes ? height - 1 - lane : lane);
-      const forwards = ((height - 1 - lane) % 2 === 0) === (direction === 'right');
-      for (let i = 0; i < width; i += 1) cells.push([x + (forwards ? i : width - 1 - i), py]);
-    }
-  } else {
-    for (let lane = 0; lane < width; lane += 1) {
-      const px = x + (reverseLanes ? width - 1 - lane : lane);
-      const forwards = ((width - 1 - lane) % 2 === 0) === (direction === 'down');
-      for (let i = 0; i < height; i += 1) cells.push([px, y + (forwards ? i : height - 1 - i)]);
-    }
+/** Backbite moves preserve a single orthogonal Hamiltonian path and every cell. */
+function mixedHamiltonianPath(width, height, passes, random, work) {
+  const area = width * height;
+  const path = new Uint16Array(area);
+  const positions = new Uint16Array(area);
+  for (let i = 0; i < area; i += 1) {
+    const y = Math.floor(i / width), offset = i % width;
+    const cell = y * width + (y % 2 ? width - 1 - offset : offset);
+    path[i] = cell; positions[cell] = i;
   }
-  return cells;
-}
-
-function chooseOutwardDirection(tile, width, height, random) {
-  const sides = [
-    ['left', tile.x, tile.width >= 2], ['right', width - tile.x - tile.width, tile.width >= 2],
-    ['up', tile.y, tile.height >= 2], ['down', height - tile.y - tile.height, tile.height >= 2],
-  ];
-  const nearest = Math.min(...sides.map(([, distance]) => distance));
-  const choices = sides.filter(([, distance, allowed]) => distance === nearest && allowed);
-  if (!choices.length) throw new Error('Tile has no valid outward head direction.');
-  return choices[Math.floor(random() * choices.length)][0];
-}
-
-function generateCandidate(profile, random, work) {
-  const { width, height } = profile;
-  const tiles = [];
-  // A two-row edge band explicitly includes both 2-cell and 30-cell arrows.
-  const edgeWidths = [1, 15];
-  let edgeRemaining = width - 16;
-  while (edgeRemaining > 0) {
-    const amount = Math.min(15, edgeRemaining);
-    edgeWidths.push(amount);
-    edgeRemaining -= amount;
+  const neighbors = [];
+  for (let move = 0; move < area * passes; move += 1) {
+    const atStart = random() < 0.5;
+    const endIndex = atStart ? 0 : area - 1;
+    const cell = path[endIndex], x = cell % width, y = Math.floor(cell / width);
+    neighbors.length = 0;
+    if (x > 0) neighbors.push(cell - 1);
+    if (x + 1 < width) neighbors.push(cell + 1);
+    if (y > 0) neighbors.push(cell - width);
+    if (y + 1 < height) neighbors.push(cell + width);
+    const other = positions[neighbors[Math.floor(random() * neighbors.length)]];
+    if (Math.abs(other - endIndex) === 1) continue;
+    const low = atStart ? 0 : other + 1;
+    const high = atStart ? other - 1 : area - 1;
+    for (let a = low, b = high; a < b; a += 1, b -= 1) [path[a], path[b]] = [path[b], path[a]];
+    for (let i = low; i <= high; i += 1) positions[path[i]] = i;
+    work.backbiteMoves += 1;
   }
-  for (let i = edgeWidths.length - 1; i > 0; i -= 1) {
-    const other = Math.floor(random() * (i + 1));
-    [edgeWidths[i], edgeWidths[other]] = [edgeWidths[other], edgeWidths[i]];
-  }
-  let edgeX = 0;
-  for (const amount of edgeWidths) {
-    tiles.push({ x: edgeX, y: 0, width: amount, height: 2 });
-    edgeX += amount;
-  }
-  let y = 2;
-  while (y < height) {
-    const remainingHeight = height - y;
-    const choices = profile.bandHeights.filter((amount) => amount <= remainingHeight && remainingHeight - amount !== 1);
-    const bandHeight = choices.length ? choices[Math.floor(random() * choices.length)] : remainingHeight;
-    let x = 0;
-    while (x < width) {
-      const remainingWidth = width - x;
-      const maximum = Math.min(Math.floor(MAX_LENGTH / bandHeight), remainingWidth);
-      const widths = [];
-      for (let amount = 2; amount <= maximum; amount += 1) {
-        if (remainingWidth - amount !== 1) widths.push(amount);
-      }
-      const desiredWidth = Math.round(chooseLength(profile, random) / bandHeight);
-      const closeness = Math.min(...widths.map((amount) => Math.abs(amount - desiredWidth)));
-      const closest = widths.filter((amount) => Math.abs(amount - desiredWidth) === closeness);
-      const tileWidth = closest[Math.floor(random() * closest.length)];
-      if (!tileWidth) throw new Error('No bounded full-grid tile partition is available.');
-      tiles.push({ x, y, width: tileWidth, height: bandHeight });
-      x += tileWidth;
-    }
-    y += bandHeight;
-  }
-  const rotation = Math.floor(random() * 4);
-  const mirror = random() < 0.5;
-  const transform = ([px, py]) => {
-    let tx = mirror ? width - 1 - px : px;
-    let ty = py;
-    for (let turn = 0; turn < rotation; turn += 1) [tx, ty] = [height - 1 - ty, tx];
-    return [tx, ty];
-  };
-  const arrows = tiles.map((tile, index) => ({
-    id: 'a' + index.toString(36),
-    cells: tilePath(tile, chooseOutwardDirection(tile, width, height, random), random).map(transform),
-  }));
-  work.tiles += tiles.length;
-  return { width, height, arrows };
+  return { path, positions };
 }
 
 /**
- * Fully tiles the grid with 2..30-cell paths. A head points through the closest
- * outer side of its rectangle. Any blocker belongs to a tile with a strictly
- * smaller distance to the board edge, so dependency cycles cannot occur.
- * Structural, graph and independent direct-greedy checks still run before return.
+ * Cuts pieces from a mixed full-grid route in actual legal removal order.
+ * Each cut has 2..30 cells and leaves remaining route components of size >= 2.
+ * A clear ray may contain only pieces already cut, so dependencies are acyclic.
  */
+function generateCandidate(profile, random, work) {
+  const { width, height } = profile;
+  const area = width * height;
+  const { path, positions } = mixedHamiltonianPath(width, height, profile.mixPasses, random, work);
+  const alive = new Uint8Array(area).fill(1);
+  const owners = new Int16Array(area).fill(-1);
+  const starts = new Uint16Array(area), ends = new Uint16Array(area);
+  const depths = [], arrows = [];
+  let remaining = area, roots = 0;
+  while (remaining > 0 && arrows.length < area / 2) {
+    // Recompute the still-contiguous intervals of the original mixed route.
+    for (let index = 0; index < area;) {
+      if (!alive[path[index]]) { index += 1; continue; }
+      const start = index;
+      while (index < area && alive[path[index]]) index += 1;
+      for (let i = start; i < index; i += 1) { starts[i] = start; ends[i] = index - 1; }
+    }
+    const targetLength = arrows.length === 0 ? MAX_LENGTH : arrows.length === 1 ? 2 : chooseLength(profile, random);
+    let best = null, bestScore = -Infinity;
+    const inspectHead = (head, dx, dy, dependencyDepth) => {
+      const hx = head % width, hy = Math.floor(head / width);
+      const px = hx - dx, py = hy - dy;
+      if (!inside(px, py, width, height)) return;
+      const previousCell = py * width + px;
+      if (!alive[previousCell]) return;
+      const index = positions[head], previousIndex = positions[previousCell];
+      const step = index - previousIndex;
+      if (Math.abs(step) !== 1) return;
+      // The untouched component beyond the chosen head cannot become a singleton.
+      if ((step === 1 ? ends[index] - index : index - starts[index]) === 1) return;
+      const available = step === 1 ? index - starts[index] + 1 : ends[index] - index + 1;
+      const maximum = Math.min(MAX_LENGTH, available);
+      for (let length = 2; length <= maximum; length += 1) {
+        work.cutCandidates += 1;
+        if (available - length === 1) continue;
+        if (arrows.length < 2 && length !== targetLength) continue;
+        const isRoot = dependencyDepth === 0;
+        const rootPreference = roots < profile.roots ? (isRoot ? 100000 : 0) : (isRoot ? -100000 : 0);
+        const score = rootPreference - Math.abs(length - targetLength) + dependencyDepth * profile.depthBias + random() * 0.4;
+        if (score > bestScore) { best = { index, step, length, dependencyDepth, isRoot }; bestScore = score; }
+      }
+    };
+    // Only the first remaining cell seen from each edge has a clear outward ray.
+    // The depth of removed owners on that ray is accumulated independently.
+    const scan = (start, increment, count, dx, dy) => {
+      let depth = 0;
+      for (let i = 0, cell = start; i < count; i += 1, cell += increment) {
+        if (alive[cell]) { inspectHead(cell, dx, dy, depth); return; }
+        depth = Math.max(depth, depths[owners[cell]] || 0);
+      }
+    };
+    for (let y = 0; y < height; y += 1) {
+      scan(y * width, 1, width, -1, 0);
+      scan(y * width + width - 1, -1, width, 1, 0);
+    }
+    for (let x = 0; x < width; x += 1) {
+      scan(x, width, height, 0, -1);
+      scan((height - 1) * width + x, -width, height, 0, 1);
+    }
+    if (!best) return null;
+    const cells = [];
+    for (let offset = best.length - 1; offset >= 0; offset -= 1) {
+      const cell = path[best.index - offset * best.step];
+      cells.push([cell % width, Math.floor(cell / width)]);
+      alive[cell] = 0; owners[cell] = arrows.length;
+    }
+    depths.push(best.dependencyDepth + 1);
+    if (best.isRoot) roots += 1;
+    arrows.push({ id: 'a' + arrows.length.toString(36), cells });
+    remaining -= best.length;
+  }
+  if (remaining !== 0) return null;
+  // Enumeration and IDs must not disclose the construction's removal order.
+  for (let i = arrows.length - 1; i > 0; i -= 1) {
+    const other = Math.floor(random() * (i + 1));
+    [arrows[i], arrows[other]] = [arrows[other], arrows[i]];
+  }
+  arrows.forEach((arrow, index) => { arrow.id = `a${index.toString(36)}`; });
+  return { width, height, arrows };
+}
+
+/** Full-grid route mixing and legal cutting have fixed move, cut and retry limits. */
 export function generateBoard(difficulty = 'easy', seed = 'arrow-journey') {
   if (!Object.hasOwn(DIFFICULTIES, difficulty)) throw new RangeError(`Unknown difficulty: ${String(difficulty)}`);
   if ((typeof seed !== 'string' && typeof seed !== 'number') || (typeof seed === 'number' && !Number.isFinite(seed))) {
@@ -370,15 +431,20 @@ export function generateBoard(difficulty = 'easy', seed = 'arrow-journey') {
   if (seed.length > 1024) throw new RangeError('Seed must be at most 1024 characters.');
   const profile = DIFFICULTIES[difficulty];
   const random = randomFromSeed(`${RULES_VERSION}|${GENERATOR_VERSION}|${DIFFICULTY_PROFILE_VERSION}|${difficulty}|${seed}`);
-  const work = { boardAttempts: 0, tiles: 0 };
+  const work = { boardAttempts: 0, backbiteMoves: 0, cutCandidates: 0 };
   for (let attempt = 0; attempt < MAX_BOARD_ATTEMPTS; attempt += 1) {
     work.boardAttempts += 1;
     const board = generateCandidate(profile, random, work);
+    if (!board) continue;
     const validation = validateBoard(board);
     if (!validation.valid) continue;
     const solution = solveBoard(board);
-    if (!solution.solvable || solution.metrics.density < profile.minDensity || solution.metrics.maxLength < 24
-        || solution.metrics.totalBends < 3 || solution.metrics.minLength !== 2) continue;
+    if (!solution.solvable || solution.metrics.density < profile.minDensity || solution.metrics.maxLength !== MAX_LENGTH
+        || solution.metrics.totalBends < 3 || solution.metrics.minLength !== 2
+        || solution.metrics.dependencyDepth < profile.minDepth
+        || solution.metrics.initialRemovableRatio < profile.minInitialRatio || solution.metrics.initialRemovableRatio > profile.maxInitialRatio
+        || solution.metrics.nonRectangularRatio < profile.minNonRectangularRatio
+        || solution.metrics.boundingBoxInterpenetrationRatio < profile.minInterpenetrationRatio) continue;
     return {
       ...board, difficulty, seed, generatorVersion: GENERATOR_VERSION, rulesVersion: RULES_VERSION,
       difficultyProfileVersion: DIFFICULTY_PROFILE_VERSION, fingerprint: boardFingerprint(board),
