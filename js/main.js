@@ -1,6 +1,7 @@
 import "../style.css";
 import {
   DIFFICULTIES,
+  BOARD_SHAPES,
   validateBoard,
   canRemove,
   getRemovable,
@@ -47,6 +48,7 @@ let store,
   cloud,
   screen = "home",
   selected = "easy",
+  selectedShape = "random",
   boardView,
   busy = false,
   owner = "guest",
@@ -106,6 +108,7 @@ function failed(e) {
 }
 function applySettings() {
   audio.configure(settings());
+  audio.setBoard(profile?.activeGame?.playId);
   const theme = settings().arrowTheme || "forest";
   const dark = darkMode();
   document.documentElement.dataset.colorMode = dark ? "dark" : "light";
@@ -147,6 +150,7 @@ function render() {
   renderNotices();
   if (screen === "play" && profile.activeGame) {
     const g = profile.activeGame;
+    audio.setBoard(g.playId);
     boardView = new BoardView(app.querySelector("#board"), {
       onTap: tap,
       onViewChange: (v) => {
@@ -162,6 +166,9 @@ function render() {
     boardView.setView(g.view);
     updatePlay();
   } else {
+    app.querySelector("#new-shape")?.addEventListener("change", (event) => {
+      selectedShape = event.target.value;
+    });
     app.querySelectorAll("[data-difficulty]").forEach((el) =>
       el.addEventListener("click", () => {
         selected = el.dataset.difficulty;
@@ -193,7 +200,7 @@ function profileSizeLabel(p) {
 }
 function homeMarkup() {
   const resume = profile.activeGame;
-  return `<section class="home-screen"><div class="home-content">${completion ? `<div class="completion" role="status">${icon("check")}<div><strong>クリア</strong><span>${DIFFICULTIES[completion.difficulty].name} · ミス ${completion.misses} · ヒント ${completion.hintsUsed} / 3</span></div></div>` : ""}${resume ? `<button class="resume-card" data-action="resume" ${busy || stale ? "disabled" : ""}><span class="resume-title">つづきから</span><span class="resume-meta"><strong>${DIFFICULTIES[resume.board.difficulty].name}</strong><span>残り ${resume.remainingIds.length} 本</span></span>${icon("arrow")}</button>` : ""}<section class="level-section" aria-labelledby="new-game-title"><h2 class="section-title" id="new-game-title">新しい問題</h2><div class="level-list">${Object.entries(
+  return `<section class="home-screen"><div class="home-content">${completion ? `<div class="completion" role="status">${icon("check")}<div><strong>クリア</strong><span>${DIFFICULTIES[completion.difficulty].name} · ミス ${completion.misses} · ヒント ${completion.hintsUsed} / 3</span></div></div>` : ""}${resume ? `<button class="resume-card" data-action="resume" ${busy || stale ? "disabled" : ""}><span class="resume-title">つづきから</span><span class="resume-meta"><strong>${DIFFICULTIES[resume.board.difficulty].name}</strong><span>残り ${resume.remainingIds.length} 本</span></span>${icon("arrow")}</button>` : ""}<section class="level-section" aria-labelledby="new-game-title"><div class="level-heading"><h2 class="section-title" id="new-game-title">新しい問題</h2><label class="shape-select" for="new-shape">形<select id="new-shape" ${busy || stale ? "disabled" : ""}><option value="random" ${selectedShape === "random" ? "selected" : ""}>ランダム</option>${BOARD_SHAPES.map(({ id, label }) => `<option value="${id}" ${selectedShape === id ? "selected" : ""}>${label}</option>`).join("")}</select></label></div><div class="level-list">${Object.entries(
     DIFFICULTIES,
   )
     .map(
@@ -210,12 +217,13 @@ function playMarkup() {
     screen = "home";
     return homeMarkup();
   }
-  return `<section class="play"><div class="play-meta"><span>${DIFFICULTIES[g.board.difficulty].name}<small>${g.board.width} × ${g.board.height}</small></span><span class="saved-status">端末に保存</span></div><div class="play-info"><div><span>残り</span><strong id="remaining">${g.remainingIds.length}</strong><small> / ${g.board.arrows.length}</small></div><div class="miss-count"><span>ミス</span><strong id="misses">${g.misses}</strong></div></div><div class="progress"><span id="progress-bar" style="width:${100 * (1 - g.remainingIds.length / g.board.arrows.length)}%"></span></div><div class="game-frame"><div id="board" class="board-viewport" aria-label="矢印パズル盤面"></div></div><div class="board-toolbar"><div class="zoom-controls"><button class="icon-button" data-action="zoomOut" aria-label="縮小">${icon("minus")}</button><button data-action="fit" aria-label="盤面を全体表示">${icon("fit")}<span>全体表示</span></button><button class="icon-button" data-action="zoomIn" aria-label="拡大">${icon("plus")}</button></div><button class="hint-button" data-action="hint">${icon("hint")}<span>ヒント<small id="hint-left">残り ${3 - g.hintsUsed} 回</small></span></button></div><p class="play-message" id="play-message" role="status"></p></section>`;
+  const shape = BOARD_SHAPES.find((value) => value.id === g.board.shape);
+  return `<section class="play"><div class="play-meta"><span>${DIFFICULTIES[g.board.difficulty].name}<small>${g.board.width} × ${g.board.height}${shape ? " · " + shape.label : ""}</small></span><span class="saved-status">端末に保存</span></div><div class="play-info"><div><span>残り</span><strong id="remaining">${g.remainingIds.length}</strong><small> / ${g.board.arrows.length}</small></div><div class="miss-count"><span>ミス</span><strong id="misses">${g.misses}</strong></div></div><div class="progress"><span id="progress-bar" style="width:${100 * (1 - g.remainingIds.length / g.board.arrows.length)}%"></span></div><div class="game-frame${g.board.shape && g.board.shape !== "square" ? " shaped-frame" : ""}"><div id="board" class="board-viewport" aria-label="矢印パズル盤面"></div></div><div class="board-toolbar"><div class="zoom-controls"><button class="icon-button" data-action="zoomOut" aria-label="縮小">${icon("minus")}</button><button data-action="fit" aria-label="盤面を全体表示">${icon("fit")}<span>全体表示</span></button><button class="icon-button" data-action="zoomIn" aria-label="拡大">${icon("plus")}</button></div><button class="hint-button" data-action="hint">${icon("hint")}<span>ヒント<small id="hint-left">残り ${3 - g.hintsUsed} 回</small></span></button></div><p class="play-message" id="play-message" role="status"></p></section>`;
 }
 function updatePlay() {
   renderNotices();
   app
-    .querySelectorAll('[data-difficulty], [data-action="resume"]')
+    .querySelectorAll('[data-difficulty], [data-action="resume"], #new-shape')
     .forEach((button) => {
       button.disabled = busy || stale;
     });
@@ -309,6 +317,7 @@ async function generate(difficulty) {
       requestId: crypto.randomUUID(),
       difficulty,
       seed: crypto.randomUUID(),
+      shape: selectedShape === "random" ? undefined : selectedShape,
     });
   });
 }
@@ -648,7 +657,7 @@ function modal(title, body) {
 function openHelp() {
   modal(
     "遊び方",
-    `<div class="help-diagram"><svg viewBox="0 0 240 90" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M25 65V25H145m-10-10 10 10-10 10"/><path stroke-dasharray="3 7" opacity=".35" d="M160 25h55"/><path d="m204 18 8 7-8 7" opacity=".35"/></svg></div><ol class="help-steps"><li><strong>先端の向きを見る</strong><p>先端から盤面の外まで、まっすぐな道に別の矢印がなければ抜けます。</p></li><li><strong>矢印があるマスをタップ</strong><p>胴体が元の経路をたどって外へ移動します。すべて抜けたらクリアです。</p></li><li><strong>ヒントと保存</strong><p>ヒントは1盤面3回。抜けなくてもゲームオーバーはありません。</p></li></ol><p class="dialog-note">ドラッグで盤面を移動。ピンチ・ホイール・＋で拡大できます。<br>途中盤面はこの端末だけに保存します。トップからいつでも再開できます。</p>`,
+    `<div class="help-diagram"><svg viewBox="0 0 240 90" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M25 65V25H145m-10-10 10 10-10 10"/><path stroke-dasharray="3 7" opacity=".35" d="M160 25h55"/><path d="m204 18 8 7-8 7" opacity=".35"/></svg></div><ol class="help-steps"><li><strong>先端の向きを見る</strong><p>先端から盤面の外まで、まっすぐな道に別の矢印がなければ抜けます。形の外の空白を挟んでいても、同じ直線上に矢印があれば抜けません。</p></li><li><strong>矢印があるマスをタップ</strong><p>胴体が元の経路をたどって外へ移動します。すべて抜けたらクリアです。</p></li><li><strong>ヒントと保存</strong><p>ヒントは1盤面3回。抜けなくてもゲームオーバーはありません。</p></li></ol><p class="dialog-note">ドラッグで盤面を移動。ピンチ・ホイール・＋で拡大できます。<br>途中盤面はこの端末だけに保存します。トップからいつでも再開できます。</p>`,
   );
 }
 function openStats() {
@@ -681,7 +690,7 @@ function openSettings() {
       )
       .join(
         "",
-      )}<div class="setting-row motion-row"><label for="reduced-motion"><strong>動きを減らす</strong><small>矢印の演出を短くします</small></label><input class="switch" type="checkbox" id="reduced-motion" data-setting="reducedMotion" ${s.reducedMotion ? "checked" : ""}></div></div><section class="account"><h3>成績と設定の同期</h3><p>${cloud?.configured ? (owner === "guest" ? "Googleアカウントで、成績と設定をほかの端末にも。" : "ログイン中 · 途中盤面はこの端末だけに保存します。") : "Google連携は準備中です。<br>成績・設定・途中盤面は、この端末に保存されています。"}</p><button class="secondary" id="login" ${!cloud?.configured ? "disabled" : ""}>${owner === "guest" ? "Googleでログイン" : "ログアウト"}</button>${cloud?.configured && owner !== "guest" ? '<button class="text-button" id="sync">今すぐ同期</button>' : ""}<p class="sync-status" id="sync-status"></p></section><p class="dialog-note">Arrow Journey 0.3.1<br></p>`,
+      )}<div class="setting-row motion-row"><label for="reduced-motion"><strong>動きを減らす</strong><small>矢印の演出を短くします</small></label><input class="switch" type="checkbox" id="reduced-motion" data-setting="reducedMotion" ${s.reducedMotion ? "checked" : ""}></div></div><section class="account"><h3>成績と設定の同期</h3><p>${cloud?.configured ? (owner === "guest" ? "Googleアカウントで、成績と設定をほかの端末にも。" : "ログイン中 · 途中盤面はこの端末だけに保存します。") : "Google連携は準備中です。<br>成績・設定・途中盤面は、この端末に保存されています。"}</p><button class="secondary" id="login" ${!cloud?.configured ? "disabled" : ""}>${owner === "guest" ? "Googleでログイン" : "ログアウト"}</button>${cloud?.configured && owner !== "guest" ? '<button class="text-button" id="sync">今すぐ同期</button>' : ""}<p class="sync-status" id="sync-status"></p></section><p class="dialog-note">Arrow Journey 0.4.0<br></p>`,
   );
   d.querySelectorAll("[data-setting]").forEach((input) =>
     input.addEventListener("change", async () => {

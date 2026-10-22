@@ -1,12 +1,16 @@
 /** Arrow Journey rules and deterministic generation. No browser or storage dependencies. */
 export const RULES_VERSION = '1.0.0';
-export const GENERATOR_VERSION = '3.0.0';
+export const GENERATOR_VERSION = '4.0.0';
 export const DIFFICULTY_PROFILE_VERSION = '3.0.0';
 
 const MAX_DIMENSION = 64;
 const MAX_LENGTH = 30;
 const MAX_BOARD_ATTEMPTS = 16;
 const BOARD_SIZES = Object.freeze([20, 24, 28, 32]);
+export const BOARD_SHAPES = Object.freeze([
+  { id: 'square', label: '正方形' }, { id: 'circle', label: '円' }, { id: 'diamond', label: 'ひし形' },
+  { id: 'cross', label: '十字' }, { id: 'heart', label: 'ハート' },
+].map(Object.freeze));
 
 // width/height are legacy metadata defaults; sizes defines every profile's actual range.
 export const DIFFICULTIES = Object.freeze(Object.fromEntries([
@@ -36,6 +40,25 @@ function inspectStructure(board) {
   if (!Array.isArray(arrows) || arrows.length === 0 || arrows.length > Math.floor(width * height / 2)) {
     return { errors: ['Board must contain a bounded, nonempty array of arrows.'] };
   }
+  // The mask describes the original complete board, never just the remaining arrows.
+  // Its absence retains the permissive rectangle semantics of legacy saved boards.
+  let mask = null;
+  if (Object.hasOwn(board, 'mask')) {
+    if (!Array.isArray(board.mask) || board.mask.length < 2 || board.mask.length > width * height) {
+      return { errors: ['Board mask must contain 2 to width * height cells.'] };
+    }
+    mask = new Set();
+    for (const point of board.mask) {
+      if (!Array.isArray(point) || point.length !== 2 || !point.every(Number.isInteger) || !inside(point[0], point[1], width, height)) {
+        errors.push('Board mask contains an invalid or out-of-bounds cell.');
+      } else {
+        const key = coordinateKey(...point);
+        if (mask.has(key)) errors.push(`Board mask repeats cell (${key}).`);
+        mask.add(key);
+      }
+    }
+    if (errors.length) return { errors };
+  }
   const byId = new Map();
   const occupancy = new Map();
   for (let index = 0; index < arrows.length; index += 1) {
@@ -60,6 +83,7 @@ function inspectStructure(board) {
         continue;
       }
       const key = coordinateKey(...point);
+      if (mask && !mask.has(key)) errors.push(`Arrow ${label} occupies a void cell (${key}).`);
       if (seen.has(key)) errors.push(`Arrow ${label} repeats cell (${key}).`);
       seen.add(key);
       if (occupancy.has(key)) errors.push(`Arrow ${label} overlaps arrow ${occupancy.get(key)} at (${key}).`);
@@ -84,7 +108,8 @@ function inspectStructure(board) {
       if (seen.has(coordinateKey(x, y))) errors.push(`Arrow ${label} interferes with its own head ray at (${x},${y}).`);
     }
   }
-  return { errors, byId, occupancy };
+  if (mask && [...mask].some((key) => !occupancy.has(key))) errors.push('Board arrows do not completely cover the mask.');
+  return { errors, byId, occupancy, playableCells: mask?.size ?? width * height };
 }
 
 function dependencyGraph(board, occupancy) {
@@ -249,7 +274,8 @@ export function solveBoard(board) {
     solvable: result.solvable && independent.solvable,
     order: result.order,
     metrics: {
-      arrowCount: board.arrows.length, occupiedCells, density: occupiedCells / (board.width * board.height),
+      arrowCount: board.arrows.length, occupiedCells, playableCells: structure.playableCells,
+      density: occupiedCells / structure.playableCells, boundingBoxDensity: occupiedCells / (board.width * board.height),
       minLength: Math.min(...lengths), maxLength: Math.max(...lengths), averageLength: occupiedCells / lengths.length,
       totalBends, averageBends: totalBends / lengths.length,
       initialRemovable, initialRemovableRatio: initialRemovable / lengths.length,
@@ -307,15 +333,85 @@ function chooseLength(profile, random) {
   return MAX_LENGTH;
 }
 
-/** Backbite moves preserve a single orthogonal Hamiltonian path and every cell. */
-function mixedHamiltonianPath(width, height, passes, random, work) {
-  const area = width * height;
-  const path = new Uint16Array(area);
-  const positions = new Uint16Array(area);
+/** Connected masks made of 2x2 tiles admit a cycle by merging the tiles' four-cycles. */
+function playableMask(size, shape) {
+  const tileSize = size / 2;
+  const tiles = [];
+  const cells = [];
+  for (let ty = 0; ty < tileSize; ty += 1) {
+    for (let tx = 0; tx < tileSize; tx += 1) {
+      const dx = 2 * tx + 1 - tileSize, dy = 2 * ty + 1 - tileSize;
+      const x = (tx + 0.5) / tileSize, y = (ty + 0.5) / tileSize;
+      const inShape = shape === 'square'
+        || (shape === 'circle' && dx * dx + dy * dy <= tileSize * tileSize)
+        || (shape === 'diamond' && Math.abs(dx) + Math.abs(dy) <= tileSize)
+        || (shape === 'cross' && (Math.abs(dx) <= tileSize * 0.38 || Math.abs(dy) <= tileSize * 0.38))
+        || (shape === 'heart' && (((x - 0.27) ** 2 + (y - 0.28) ** 2 <= 0.27 ** 2)
+          || ((x - 0.73) ** 2 + (y - 0.28) ** 2 <= 0.27 ** 2)
+          || (y >= 0.28 && Math.abs(x - 0.5) <= (1 - y) * 0.70)));
+      if (!inShape) continue;
+      tiles.push(ty * tileSize + tx);
+      for (let oy = 0; oy < 2; oy += 1) for (let ox = 0; ox < 2; ox += 1) cells.push((2 * ty + oy) * size + 2 * tx + ox);
+    }
+  }
+  cells.sort((a, b) => a - b);
+  return { tiles, cells };
+}
+
+function tiledHamiltonianPath(width, height, tiles, cells, random) {
+  const tileWidth = width / 2;
+  const tileSet = new Set(tiles), visited = new Set();
+  const next = new Int16Array(width * height).fill(-1), previous = new Int16Array(width * height).fill(-1);
+  const link = (a, b) => {
+    if (next[a] === -1) next[a] = b; else previous[a] = b;
+    if (next[b] === -1) next[b] = a; else previous[b] = a;
+  };
+  const unlink = (a, b) => {
+    if (next[a] === b) next[a] = -1; else previous[a] = -1;
+    if (next[b] === a) next[b] = -1; else previous[b] = -1;
+  };
+  for (const tile of tiles) {
+    const cell = 2 * Math.floor(tile / tileWidth) * width + 2 * (tile % tileWidth);
+    link(cell, cell + 1); link(cell + 1, cell + width + 1);
+    link(cell + width + 1, cell + width); link(cell + width, cell);
+  }
+  // Random depth-first spanning tree; each merge removes distinct tile-boundary edges.
+  const stack = [tiles[Math.floor(random() * tiles.length)]];
+  visited.add(stack[0]);
+  while (stack.length) {
+    const tile = stack[stack.length - 1], tx = tile % tileWidth, ty = Math.floor(tile / tileWidth);
+    const neighbors = [];
+    for (const [nx, ny] of [[tx - 1, ty], [tx + 1, ty], [tx, ty - 1], [tx, ty + 1]]) {
+      const neighbor = ny * tileWidth + nx;
+      if (inside(nx, ny, tileWidth, height / 2) && tileSet.has(neighbor) && !visited.has(neighbor)) neighbors.push(neighbor);
+    }
+    if (!neighbors.length) { stack.pop(); continue; }
+    const other = neighbors[Math.floor(random() * neighbors.length)];
+    visited.add(other); stack.push(other);
+    const low = Math.min(tile, other), cell = 2 * Math.floor(low / tileWidth) * width + 2 * (low % tileWidth);
+    let a, b, c, d;
+    if (Math.abs(tile - other) === 1) [a, b, c, d] = [cell + 1, cell + width + 1, cell + 2, cell + width + 2];
+    else [a, b, c, d] = [cell + width, cell + width + 1, cell + 2 * width, cell + 2 * width + 1];
+    unlink(a, b); unlink(c, d); link(a, c); link(b, d);
+  }
+  if (visited.size !== tiles.length) throw new Error('Generation mask must be connected.');
+  const path = new Uint16Array(cells.length);
+  let cell = cells[Math.floor(random() * cells.length)], last = random() < 0.5 ? next[cell] : previous[cell];
+  for (let i = 0; i < path.length; i += 1) {
+    path[i] = cell;
+    const following = next[cell] === last ? previous[cell] : next[cell];
+    last = cell; cell = following;
+  }
+  return path;
+}
+
+/** Backbite moves stay inside the mask and preserve every playable cell exactly once. */
+function mixedHamiltonianPath(width, height, mask, passes, random, work) {
+  const area = mask.cells.length;
+  const path = tiledHamiltonianPath(width, height, mask.tiles, mask.cells, random);
+  const positions = new Uint16Array(width * height).fill(65535);
   for (let i = 0; i < area; i += 1) {
-    const y = Math.floor(i / width), offset = i % width;
-    const cell = y * width + (y % 2 ? width - 1 - offset : offset);
-    path[i] = cell; positions[cell] = i;
+    positions[path[i]] = i;
   }
   const neighbors = [];
   for (let move = 0; move < area * passes; move += 1) {
@@ -323,10 +419,10 @@ function mixedHamiltonianPath(width, height, passes, random, work) {
     const endIndex = atStart ? 0 : area - 1;
     const cell = path[endIndex], x = cell % width, y = Math.floor(cell / width);
     neighbors.length = 0;
-    if (x > 0) neighbors.push(cell - 1);
-    if (x + 1 < width) neighbors.push(cell + 1);
-    if (y > 0) neighbors.push(cell - width);
-    if (y + 1 < height) neighbors.push(cell + width);
+    if (x > 0 && positions[cell - 1] !== 65535) neighbors.push(cell - 1);
+    if (x + 1 < width && positions[cell + 1] !== 65535) neighbors.push(cell + 1);
+    if (y > 0 && positions[cell - width] !== 65535) neighbors.push(cell - width);
+    if (y + 1 < height && positions[cell + width] !== 65535) neighbors.push(cell + width);
     const other = positions[neighbors[Math.floor(random() * neighbors.length)]];
     if (Math.abs(other - endIndex) === 1) continue;
     const low = atStart ? 0 : other + 1;
@@ -343,12 +439,13 @@ function mixedHamiltonianPath(width, height, passes, random, work) {
  * Each cut has 2..30 cells and leaves remaining route components of size >= 2.
  * A clear ray may contain only pieces already cut, so dependencies are acyclic.
  */
-function generateCandidate(profile, random, work) {
+function generateCandidate(profile, mask, random, work) {
   const { width, height } = profile;
-  const area = width * height;
-  const { path, positions } = mixedHamiltonianPath(width, height, profile.mixPasses, random, work);
-  const alive = new Uint8Array(area).fill(1);
-  const owners = new Int16Array(area).fill(-1);
+  const area = mask.cells.length;
+  const { path, positions } = mixedHamiltonianPath(width, height, mask, profile.mixPasses, random, work);
+  const alive = new Uint8Array(width * height);
+  for (const cell of mask.cells) alive[cell] = 1;
+  const owners = new Int16Array(width * height).fill(-1);
   const starts = new Uint16Array(area), ends = new Uint16Array(area);
   const depths = [], arrows = [];
   let remaining = area, roots = 0;
@@ -421,10 +518,10 @@ function generateCandidate(profile, random, work) {
     [arrows[i], arrows[other]] = [arrows[other], arrows[i]];
   }
   arrows.forEach((arrow, index) => { arrow.id = `a${index.toString(36)}`; });
-  return { width, height, arrows };
+  return { width, height, shape: profile.shape, mask: mask.cells.map((cell) => [cell % width, Math.floor(cell / width)]), arrows };
 }
 
-/** Size uses a separate, difficulty-independent seed stream; an override supports previews/tests. */
+/** Size and shape each use a difficulty-independent seed stream; overrides support previews/tests. */
 export function generateBoard(difficulty = 'easy', seed = 'arrow-journey', options = {}) {
   if (!Object.hasOwn(DIFFICULTIES, difficulty)) throw new RangeError(`Unknown difficulty: ${String(difficulty)}`);
   if ((typeof seed !== 'string' && typeof seed !== 'number') || (typeof seed === 'number' && !Number.isFinite(seed))) {
@@ -436,12 +533,16 @@ export function generateBoard(difficulty = 'easy', seed = 'arrow-journey', optio
   const size = options.size === undefined
     ? BOARD_SIZES[Math.floor(randomFromSeed(`${GENERATOR_VERSION}|size|${seed}`)() * BOARD_SIZES.length)] : options.size;
   if (!BOARD_SIZES.includes(size)) throw new RangeError('Board size must be 20, 24, 28 or 32.');
-  const profile = { ...DIFFICULTIES[difficulty], width: size, height: size };
-  const random = randomFromSeed(`${RULES_VERSION}|${GENERATOR_VERSION}|${DIFFICULTY_PROFILE_VERSION}|${difficulty}|${size}|${seed}`);
+  const shape = options.shape === undefined
+    ? BOARD_SHAPES[Math.floor(randomFromSeed(`${GENERATOR_VERSION}|shape|${seed}`)() * BOARD_SHAPES.length)].id : options.shape;
+  if (!BOARD_SHAPES.some((entry) => entry.id === shape)) throw new RangeError('Unknown board shape.');
+  const profile = { ...DIFFICULTIES[difficulty], width: size, height: size, shape };
+  const mask = playableMask(size, shape);
+  const random = randomFromSeed(`${RULES_VERSION}|${GENERATOR_VERSION}|${DIFFICULTY_PROFILE_VERSION}|${difficulty}|${size}|${shape}|${seed}`);
   const work = { boardAttempts: 0, backbiteMoves: 0, cutCandidates: 0 };
   for (let attempt = 0; attempt < MAX_BOARD_ATTEMPTS; attempt += 1) {
     work.boardAttempts += 1;
-    const board = generateCandidate(profile, random, work);
+    const board = generateCandidate(profile, mask, random, work);
     if (!board) continue;
     const validation = validateBoard(board);
     if (!validation.valid) continue;

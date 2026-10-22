@@ -127,6 +127,11 @@ export class BoardView {
     defs.append(focusStyle);
     this.scene = svgElement("g");
     this.clipped = svgElement("g", { "clip-path": `url(#${this.clipId})` });
+    this.shapeLayer = svgElement("g", {
+      class: "board-shape",
+      "aria-hidden": "true",
+      "pointer-events": "none",
+    });
     this.dotLayer = svgElement("g", {
       class: "board-empty-dots",
       "aria-hidden": "true",
@@ -140,7 +145,12 @@ export class BoardView {
       "aria-hidden": "true",
       "pointer-events": "none",
     });
-    this.clipped.append(this.dotLayer, this.staticLayer, this.ghostLayer);
+    this.clipped.append(
+      this.shapeLayer,
+      this.dotLayer,
+      this.staticLayer,
+      this.ghostLayer,
+    );
     this.scene.append(this.clipped);
     this.svg.append(defs, this.scene);
     container.append(this.svg);
@@ -207,6 +217,8 @@ export class BoardView {
     const fingerprint = JSON.stringify([
       board.width,
       board.height,
+      board.shape,
+      board.mask,
       board.arrows.map(({ id, cells }) => [id, cells]),
     ]);
     const changed = this.fingerprint !== fingerprint;
@@ -218,6 +230,7 @@ export class BoardView {
       this.panX = this.panY = 0;
     }
     this.board = board;
+    if (changed) this.updateShape();
     this.reducedMotion = reducedMotion;
     this.hintId = hintId == null ? null : String(hintId);
     this.arrows = new Map(
@@ -307,6 +320,25 @@ export class BoardView {
   setHint(id) {
     this.hintId = id == null ? null : String(id);
     this.updateHints();
+  }
+
+  updateShape() {
+    this.shapeLayer.replaceChildren();
+    if (!this.board?.mask || this.board.shape === "square") return;
+    const cells = new Set(this.board.mask.map(([x, y]) => `${x},${y}`));
+    const fill = [],
+      edges = [];
+    for (const [x, y] of this.board.mask) {
+      fill.push(`M${x},${y}h1v1h-1Z`);
+      if (!cells.has(`${x},${y - 1}`)) edges.push(`M${x},${y}h1`);
+      if (!cells.has(`${x + 1},${y}`)) edges.push(`M${x + 1},${y}v1`);
+      if (!cells.has(`${x},${y + 1}`)) edges.push(`M${x},${y + 1}h1`);
+      if (!cells.has(`${x - 1},${y}`)) edges.push(`M${x},${y}v1`);
+    }
+    this.shapeLayer.append(
+      svgElement("path", { class: "board-shape-fill", d: fill.join(" ") }),
+      svgElement("path", { class: "board-shape-outline", d: edges.join(" ") }),
+    );
   }
 
   updateDots() {

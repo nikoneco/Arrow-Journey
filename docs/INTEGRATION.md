@@ -17,6 +17,8 @@ profile = await store.write("guest", nextProfile, profile.revision);
 
 プロファイル形式は `schemaVersion, ownerKey, revision, activeGame, summaries, clears, settings`。summaryはplayIdキーで `{playId,difficulty,misses,hintsUsed}`。clearは盤面fingerprintキーで `{boardFingerprint,playId,difficulty,misses,hintsUsed,completedAt}`。ミスとヒントの保存済み値は減少させない。集計値を保存・加算する代わりに、`aggregateStats`が重複のない記録から算出する。
 
+0.4.0の新盤面はactiveGame.boardに形状IDと元の全maskを保存する。消去・再開でmaskを縮めたり再生成したりしない。maskのない旧盤面も元のセル列・fingerprintで再開する。形状・mask・曲のデータをクラウドpayloadへ追加しない。BGMは既存playIdから端末内で選曲し、同じ盤面の再開で同じ曲になる。
+
 設定項目は `bgmEnabled,sfxEnabled,bgmVolume,sfxVolume,reducedMotion,arrowTheme,colorMode`。`updateSettings(profile,patch,deviceId,now)`を使い、各項目を `{value,updatedAt,deviceId}` として記録する。今回の実装では項目ごとの更新時刻、同時刻ならdeviceIdの辞書順で統合する。仕様書の提案「クラウドの確定順」とは異なる実装定義であり、端末時計のずれが同項目の競合へ影響する。設定を再操作すると、既知の最大時刻より新しい時刻を割り当てる。
 
 ## 任意のGoogle連携
@@ -87,6 +89,12 @@ Firestore Standardのdefaultデータベースを東京 `asia-northeast1` に本
 Googleアカウントへのログインは利用者から完了報告あり。Arrow JourneyアプリへのOAuthポップアップ選択と実同期は別の確認で、現在利用者のアカウント選択を依頼中。スマートフォン実機のタップ・音・インストール、物理的に別の端末間の同期は未確認。
 
 ## ローカル検証
+
+0.4.0 (2026-10-22): 正方形・円・ひし形・十字・ハートを選択またはランダム生成。形状・サイズ・難易度を分離し、shape mask内を完全に埋める。初期候補数、途中候補数、相対的な依存深さの採用条件を保持。合法な除去で新しい妨害は生まれないルールのため、難しさは主に合法な矢印を見つける過程にある。時間制限や失敗による終了は加えない。
+
+Node91成功・Firestore Emulator専用1skip。正方形1,600盤面と5形状の2,000盤面で生成失敗なし。mask完全被覆、空白不使用、独立した2合法順での全消去、同じ形・サイズ内の難易度差、旧v1/v2/v3保存互換を確認。形状・maskも同期payloadから除外する対象試験1件を追加条件で再実行して成功。ローカルChrome17試験成功。5形状のWorker選択、空白タップ、消去後ドット、再読込再開、354/390px、明暗、連続入力・ピンチ、オフライン生成、2版の更新と保存保持を確認。Browser skillは一覧にないため既存Playwrightを使用。
+
+音声は5曲のオリジナルWeb Audio譜面で、56〜76 BPM・柔らかい音色・打楽器なし。盤面ごとに既存playIdから選び、同じ盤面の再描画では再始動しない。BGM停止・曲切替は最大100ms、音量は50msでフェードする。音声14ユニット試験でチャンネル分離、非表示復帰、50分相当のノード解放、失敗封じ込め、フェードを確認。Chrome実AudioContextの譜面スケジュールと再開選曲をブラウザー試験で確認。全5曲をChromeのOfflineAudioContextで一巡描画し、音量1でピーク0.029未満〜0.040未満、不正値・クリッピング0を確認した。これはデジタル信号検証であり、iPhone/iPadの音量・再生復帰・聴感・リラックス効果の実証には含めない。Firebase/GAS、同期schema、PWA識別と公開先は変更しない。
 
 0.3.1 (2026-10-21): iPhone/iPadのホーム画面PWAで、次の矢印をすぐタップするとブラウザーが拡大するという利用者報告への対策。CSSのtouch-action指定に加えて、盤面SVGのtouchstart/move/endとdblclickの既定動作を非passiveリスナーで抑止する。ゲーム入力は従来のPointer Eventsだけを使い、連続入力の間引きや待ち時間は設けない。ページ全体のuser-scalable/maximum-scale制限は追加しない。
 

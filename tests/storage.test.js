@@ -60,9 +60,9 @@ test('settings merge separately by timestamp, deterministic device tie and monot
 });
 test('cloud payload explicitly excludes puzzle, seed, removal history and local owner',()=>{
   const p=createProfile('uid:alice');p.summaries['play-1']=summary();
-  p.activeGame={playId:'play-1',board:{seed:'private-seed',cells:[[1,1]]},remainingIds:['a'],misses:0,hintsUsed:0,hintId:null,hintRevision:null,boardRevision:0,startedAt:100};
+  p.activeGame={playId:'play-1',board:{seed:'private-seed',cells:[[1,1]],shape:'heart',mask:[[1,1],[2,1]]},remainingIds:['a'],misses:0,hintsUsed:0,hintId:null,hintRevision:null,boardRevision:0,startedAt:100};
   const payload=toCloudPayload(p),text=JSON.stringify(payload);
-  for(const forbidden of ['private-seed','remainingIds','activeGame','ownerKey','boardRevision','cells'])assert.equal(text.includes(forbidden),false);
+  for(const forbidden of ['private-seed','remainingIds','activeGame','ownerKey','boardRevision','cells','shape','mask','heart'])assert.equal(text.includes(forbidden),false);
   assert.deepEqual(Object.keys(payload),['summaries','clears','settings']);
 });
 test('legacy five-setting IDB read adds default theme without changing raw game, settings or revision',async()=>{

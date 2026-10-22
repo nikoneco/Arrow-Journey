@@ -324,6 +324,7 @@ test("resumed boards show dots only at removed arrow cell centers below the clip
   view.setBoard(board);
   assert.equal(view.dotLayer.children.length, 0);
   assert.deepEqual(view.clipped.children, [
+    view.shapeLayer,
     view.dotLayer,
     view.staticLayer,
     view.ghostLayer,
@@ -396,5 +397,37 @@ test("dots follow saved removal state and theme changes without blocking taps or
   await view.removeArrow("straight");
   assert.equal(view.dotLayer.children.length, 5);
   assert.equal(view.ghosts.size, 0);
+  view.destroy();
+});
+
+test("shape fill and boundary exclude void cells; only removed playable cells become dots", (context) => {
+  const { view } = renderHost(context);
+  const shaped = {
+    ...board,
+    shape: "cross",
+    mask: board.arrows.flatMap((arrow) => arrow.cells),
+  };
+  const taps = [];
+  view.onTap = (id) => taps.push(id);
+  view.localPoint = (x, y) => ({ x, y });
+  view.setBoard(shaped);
+  const fill = view.shapeLayer.querySelector(".board-shape-fill");
+  const outline = view.shapeLayer.querySelector(".board-shape-outline");
+  assert.equal(fill.getAttribute("d").match(/Z/g).length, shaped.mask.length);
+  assert.equal(outline.getAttribute("d").match(/M/g).length, 12);
+  assert.equal(view.shapeLayer.getAttribute("pointer-events"), "none");
+  view.tapAt(3.5, 2.5); // Inside the bounding box, outside the playable mask.
+  assert.deepEqual(taps, []);
+  view.setBoard(shaped, ["straight"]);
+  assert.equal(view.dotLayer.children.length, 3);
+  for (const dot of view.dotLayer.children) {
+    const cell = [
+      Number(dot.getAttribute("cx")) - 0.5,
+      Number(dot.getAttribute("cy")) - 0.5,
+    ];
+    assert.ok(shaped.mask.some(([x, y]) => x === cell[0] && y === cell[1]));
+  }
+  view.setBoard(board); // Legacy rectangular save has no shape/mask metadata.
+  assert.equal(view.shapeLayer.children.length, 0);
   view.destroy();
 });
