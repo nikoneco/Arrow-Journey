@@ -4,9 +4,9 @@ import { ARROW_THEMES, APPEARANCE_MODES } from './themes.js';
 export const SCHEMA_VERSION = 1;
 export const DB_NAME = 'arrow-journey-local-v1';
 export const DIFFICULTIES = ['easy', 'normal', 'hard', 'expert'];
-export const DEFAULT_SETTINGS = Object.freeze({ bgmEnabled: true, sfxEnabled: true, bgmVolume: 0.25, sfxVolume: 0.5, reducedMotion: false, arrowTheme: 'forest', colorMode: 'light' });
+export const DEFAULT_SETTINGS = Object.freeze({ bgmEnabled: true, sfxEnabled: true, bgmVolume: 0.25, sfxVolume: 0.5, reducedMotion: false, arrowTheme: 'forest', colorMode: 'light', showMistakes: false });
 const SETTING_ENUMS = { arrowTheme: new Set(ARROW_THEMES.map(theme => theme.id)), colorMode: new Set(APPEARANCE_MODES.map(mode => mode.id)) };
-const OPTIONAL_SETTINGS = Object.keys(SETTING_ENUMS);
+const OPTIONAL_SETTINGS = [...Object.keys(SETTING_ENUMS), 'showMistakes'];
 const REQUIRED_LEGACY_SETTINGS = Object.keys(DEFAULT_SETTINGS).filter(key => !OPTIONAL_SETTINGS.includes(key));
 const defaultSetting = key => ({ value: DEFAULT_SETTINGS[key], updatedAt: 0, deviceId: 'default' });
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -36,7 +36,7 @@ export function validateProfile(profile, owner = profile?.ownerKey, validateGame
     const summary = profile.summaries[profile.activeGame.playId];
     if (!summary || summary.misses !== profile.activeGame.misses || summary.hintsUsed !== profile.activeGame.hintsUsed) throw new CorruptDataError('盤面と成績の保存内容が一致しません。', copy(profile));
   }
-  // Five/six-setting records remain valid. Never rewrite the raw IDB record on read.
+  // Five/six/seven-setting records remain valid. Never rewrite the raw IDB record on read.
   const missing = OPTIONAL_SETTINGS.filter(key => !Object.hasOwn(profile.settings, key));
   if (missing.length) {
     const migrated = copy(profile);

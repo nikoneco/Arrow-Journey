@@ -2,18 +2,21 @@ import { sampleArrow } from "./engine.js";
 import { ARROW_THEMES } from "./themes.js";
 
 const NS = "http://www.w3.org/2000/svg";
+const HOLD_GUIDE_MS = 450;
 const ACCENT_COLORS = Object.freeze({
   light: Object.freeze({
     hint: "#b78b3e",
     focus: "#718b78",
     blocked: "#a46b51",
     dot: "#aab1a8",
+    guide: "#87958c",
   }),
   dark: Object.freeze({
     hint: "#e4bc72",
     focus: "#a9c8b2",
     blocked: "#e2a489",
     dot: "#7d8a81",
+    guide: "#98aba0",
   }),
 });
 let nextClip = 0;
@@ -97,6 +100,7 @@ export class BoardView {
     this.gestureCancelled = false;
     this.dragging = false;
     this.pinch = null;
+    this.holdGuide = null;
     this.listeners = [];
     this.themeId = "forest";
     this.dark = false;
@@ -140,6 +144,11 @@ export class BoardView {
       opacity: 0.45,
     });
     this.staticLayer = svgElement("g");
+    this.guideLayer = svgElement("g", {
+      class: "board-guide",
+      "aria-hidden": "true",
+      "pointer-events": "none",
+    });
     this.ghostLayer = svgElement("g", {
       class: "arrow-ghosts",
       "aria-hidden": "true",
@@ -148,6 +157,7 @@ export class BoardView {
     this.clipped.append(
       this.shapeLayer,
       this.dotLayer,
+      this.guideLayer,
       this.staticLayer,
       this.ghostLayer,
     );
@@ -158,7 +168,13 @@ export class BoardView {
     // Some iOS versions still zoom after rapid taps despite touch-action.
     // Cancel only the browser gesture; Pointer Events handle every game tap
     // and our two-finger pinch, without a double-tap debounce or second input path.
-    for (const type of ["touchstart", "touchmove", "touchend", "dblclick"])
+    for (const type of [
+      "touchstart",
+      "touchmove",
+      "touchend",
+      "dblclick",
+      "contextmenu",
+    ])
       this.listen(
         type,
         (event) => {
@@ -201,11 +217,24 @@ export class BoardView {
       if (!event.repeat && this.remaining.has(group.dataset.arrowId))
         this.onTap(this.arrows.get(group.dataset.arrowId).id);
     });
+    this.pageDocument = this.svg.ownerDocument || document;
+    if (this.pageDocument.addEventListener)
+      this.listen(
+        "visibilitychange",
+        () => {
+          if (this.pageDocument.hidden) this.cancelGesture();
+        },
+        undefined,
+        this.pageDocument,
+      );
+    const pageWindow = this.pageDocument.defaultView || globalThis.window;
+    if (pageWindow?.addEventListener)
+      this.listen("blur", () => this.cancelGesture(), undefined, pageWindow);
   }
 
-  listen(type, handler, options) {
-    this.svg.addEventListener(type, handler, options);
-    this.listeners.push([type, handler, options]);
+  listen(type, handler, options, target = this.svg) {
+    target.addEventListener(type, handler, options);
+    this.listeners.push([target, type, handler, options]);
   }
 
   setBoard(
@@ -241,6 +270,14 @@ export class BoardView {
       for (const [x, y] of arrow.cells)
         this.cellOwners.set(y * board.width + x, id);
     this.remaining = new Set(Array.from(remainingIds, String));
+    // A save for another arrow or a settings render keeps the same gesture.
+    // In particular, it must not discard a rapid tap already in progress.
+    if (
+      this.holdGuide &&
+      (!this.remaining.has(this.holdGuide.id) ||
+        this.ghosts.has(this.holdGuide.id))
+    )
+      this.cancelGesture();
     this.updateDots();
     this.svg.setAttribute("viewBox", `0 0 ${board.width} ${board.height}`);
     this.clipRect.setAttribute("width", board.width);
@@ -368,6 +405,9 @@ export class BoardView {
     this.colors = this.dark ? ACCENT_COLORS.dark : ACCENT_COLORS.light;
     this.ink = this.dark ? theme.darkInk : theme.ink;
     this.dotLayer.setAttribute("fill", this.colors.dot);
+    this.guideLayer
+      .querySelector(".board-ray-guide")
+      ?.setAttribute("stroke", this.colors.guide);
     this.updateHints();
     for (const { group } of this.ghosts.values()) this.colorArrow(group);
   }
@@ -428,6 +468,7 @@ export class BoardView {
 
   removeArrow(id) {
     const key = String(id);
+    if (this.holdGuide?.id === key) this.cancelGesture();
     if (this.ghosts.has(key)) return this.ghosts.get(key).promise;
     const arrow = this.arrows.get(key);
     this.remaining.delete(key);
@@ -508,7 +549,12 @@ export class BoardView {
   }
 
   pointerDown(event) {
-    if (!this.board || (event.pointerType === "mouse" && event.button !== 0))
+    if (
+      !this.board ||
+      this.destroyed ||
+      this.pageDocument.hidden ||
+      (event.pointerType === "mouse" && event.button !== 0)
+    )
       return;
     event.preventDefault();
     if (!this.pointers.size) {
@@ -528,8 +574,73 @@ export class BoardView {
     }
     if (this.pointers.size >= 2) {
       this.gestureCancelled = true;
+      this.clearHoldGuide();
       this.startPinch();
-    }
+    } else this.startHoldGuide(event.pointerId);
+  }
+
+  startHoldGuide(pointerId) {
+    this.clearHoldGuide();
+    const pointer = this.pointers.get(pointerId);
+    const id = this.arrowAt(pointer.x, pointer.y);
+    if (id == null) return;
+    const hold = { pointerId, id, fingerprint: this.fingerprint, timer: null };
+    this.holdGuide = hold;
+    hold.timer = setTimeout(() => {
+      // Check the gesture identity as well as current board state: even an
+      // already-queued callback cannot revive a cancelled or replaced hold.
+      if (this.holdGuide !== hold) return;
+      hold.timer = null;
+      const current = this.pointers.get(pointerId);
+      if (
+        this.destroyed ||
+        this.pageDocument.hidden ||
+        this.svg.isConnected === false ||
+        this.fingerprint !== hold.fingerprint ||
+        this.gestureCancelled ||
+        this.dragging ||
+        this.pointers.size !== 1 ||
+        !current ||
+        this.arrowAt(current.x, current.y) !== id
+      ) {
+        this.gestureCancelled = true;
+        this.clearHoldGuide();
+        return;
+      }
+      // A guide conveys direction only. Never ask the rules whether this arrow
+      // can move, or use collision state to change the ray's length or color.
+      const cells = this.arrows.get(id).cells;
+      const head = cells.at(-1),
+        previous = cells.at(-2);
+      const dx = head[0] - previous[0],
+        dy = head[1] - previous[1];
+      const x = head[0] + 0.5,
+        y = head[1] + 0.5;
+      this.guideLayer.replaceChildren(
+        svgElement("line", {
+          class: "board-ray-guide",
+          x1: x,
+          y1: y,
+          x2: dx > 0 ? this.board.width : dx < 0 ? 0 : x,
+          y2: dy > 0 ? this.board.height : dy < 0 ? 0 : y,
+          fill: "none",
+          stroke: this.colors.guide,
+          "stroke-width": 0.07,
+          "stroke-dasharray": "0.18 0.16",
+          "stroke-linecap": "round",
+          opacity: 0.7,
+          "pointer-events": "none",
+          "aria-hidden": "true",
+        }),
+      );
+      hold.shown = true;
+    }, HOLD_GUIDE_MS);
+  }
+
+  clearHoldGuide() {
+    if (this.holdGuide?.timer != null) clearTimeout(this.holdGuide.timer);
+    this.holdGuide = null;
+    this.guideLayer.replaceChildren();
   }
 
   startPinch() {
@@ -576,6 +687,7 @@ export class BoardView {
     if (moved) {
       this.dragging = true;
       this.gestureCancelled = true;
+      this.clearHoldGuide();
     }
     if (this.dragging || this.gestureCancelled) {
       const now = this.localPoint(pointer.x, pointer.y);
@@ -601,7 +713,9 @@ export class BoardView {
       !cancelled &&
       !this.gestureCancelled &&
       !this.dragging &&
+      !this.holdGuide?.shown &&
       this.pointers.size === 1;
+    this.clearHoldGuide();
     this.pointers.delete(event.pointerId);
     try {
       if (this.svg.hasPointerCapture(event.pointerId))
@@ -620,7 +734,12 @@ export class BoardView {
   }
 
   tapAt(clientX, clientY) {
-    if (!this.board || this.destroyed) return;
+    const id = this.arrowAt(clientX, clientY);
+    if (id != null) this.onTap(this.arrows.get(id).id);
+  }
+
+  arrowAt(clientX, clientY) {
+    if (!this.board || this.destroyed) return null;
     const point = this.localPoint(clientX, clientY);
     // A cell occupies [x,x+1) × [y,y+1), including the area off its line.
     // Check the visible viewport too: pointer capture can end just outside it.
@@ -630,14 +749,13 @@ export class BoardView {
       point.y < 0 ||
       point.y >= this.board.height
     )
-      return;
+      return null;
     const x = Math.floor((point.x - this.panX) / this.zoomLevel);
     const y = Math.floor((point.y - this.panY) / this.zoomLevel);
     if (x < 0 || x >= this.board.width || y < 0 || y >= this.board.height)
-      return;
+      return null;
     const id = this.cellOwners.get(y * this.board.width + x);
-    if (this.remaining.has(id) && !this.ghosts.has(id))
-      this.onTap(this.arrows.get(id).id);
+    return this.remaining.has(id) && !this.ghosts.has(id) ? id : null;
   }
 
   zoom(factor) {
@@ -646,6 +764,7 @@ export class BoardView {
   }
 
   zoomAt(factor, center) {
+    this.cancelGesture();
     const next = Math.min(4, Math.max(1, this.zoomLevel * factor));
     const ratio = next / this.zoomLevel;
     this.panX = center.x - (center.x - this.panX) * ratio;
@@ -664,6 +783,7 @@ export class BoardView {
   setView(view) {
     if (!view || ![view.zoom, view.panX, view.panY].every(Number.isFinite))
       return;
+    this.cancelGesture();
     this.zoomLevel = Math.min(4, Math.max(1, view.zoom));
     this.panX = view.panX;
     this.panY = view.panY;
@@ -695,6 +815,7 @@ export class BoardView {
 
   cancelGesture() {
     this.gestureCancelled = true;
+    this.clearHoldGuide();
     const ids = Array.from(this.pointers.keys());
     this.pointers.clear();
     for (const id of ids) {
@@ -730,8 +851,8 @@ export class BoardView {
     this.destroyed = true;
     this.cancelGesture();
     this.cancelAnimations();
-    for (const [type, handler, options] of this.listeners)
-      this.svg.removeEventListener(type, handler, options);
+    for (const [target, type, handler, options] of this.listeners)
+      target.removeEventListener(type, handler, options);
     this.listeners = [];
     this.svg.remove();
   }

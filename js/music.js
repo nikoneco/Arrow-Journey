@@ -83,11 +83,37 @@ export function trackForBoard(key) {
   return MUSIC_TRACKS[(hash >>> 0) % MUSIC_TRACKS.length];
 }
 
+const chordForStep = (track, step) =>
+  track.chords[Math.floor(step / track.meter) % track.chords.length];
+
+// Short chord-tone replies share the playing arrangement's harmony. The
+// variation belongs to game input, never to the BGM's scheduling position.
+export function effectEvents(track, step, kind, variation = 0) {
+  const chord = chordForStep(track, step);
+  const beat = 60 / track.bpm;
+  const note = (degree, duration, gain, delay = 0, octave = 12) => ({
+    midi: chord[degree] + octave,
+    duration,
+    gain,
+    type: "sine",
+    delay,
+    attack: 0.035,
+  });
+  if (kind === "blocked") return [note(0, 0.22, 0.018, 0, 0)];
+  if (kind === "hint")
+    return [note(1, 0.45, 0.02), note(2, 0.55, 0.016, beat / 8)];
+  if (kind === "complete")
+    return [0, 1, 2, 3].map((degree, index) =>
+      note(degree, 1.3, 0.014, (index * beat) / 8),
+    );
+  const degree = track.melody[step % track.meter] ?? 1;
+  return [note((degree + variation) % chord.length, 0.4, 0.022)];
+}
+
 export function musicEvents(track, step) {
   const beat = 60 / track.bpm;
   const position = step % track.meter;
-  const chord =
-    track.chords[Math.floor(step / track.meter) % track.chords.length];
+  const chord = chordForStep(track, step);
   const degree = track.melody[position];
   const notes = [];
   const add = (midi, duration, gain, type = "sine", delay = 0, attack = 0.05) =>

@@ -326,6 +326,7 @@ test("resumed boards show dots only at removed arrow cell centers below the clip
   assert.deepEqual(view.clipped.children, [
     view.shapeLayer,
     view.dotLayer,
+    view.guideLayer,
     view.staticLayer,
     view.ghostLayer,
   ]);

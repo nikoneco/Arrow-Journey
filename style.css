@@ -316,7 +316,7 @@ a {
   font-size: 17px;
   font-weight: 600;
 }
-.completion span {
+.completion > div > span {
   display: block;
   font-size: 11px;
   color: var(--secondary);
@@ -405,6 +405,9 @@ a {
   color: var(--ink);
   font-variant-numeric: tabular-nums;
   margin-left: 8px;
+}
+[data-mistake-count][hidden] {
+  display: none;
 }
 .play-info small {
   font-size: 10px;

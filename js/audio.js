@@ -1,4 +1,12 @@
-import { MUSIC_TRACKS, musicEvents, trackForBoard } from "./music.js";
+import {
+  MUSIC_TRACKS,
+  effectEvents,
+  musicEvents,
+  trackForBoard,
+} from "./music.js";
+
+const SFX_VOICE_LIMIT = 8;
+const REMOVAL_VOICE_LIMIT = 4;
 
 const volume = (value) =>
   Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
@@ -11,6 +19,7 @@ export class Soundscape {
     this.voices = [];
     this.timer = null;
     this.step = 0;
+    this.effectIndex = 0;
     this.boardKey = null;
     this.track = MUSIC_TRACKS[0];
     this.resumePromise = null;
@@ -92,6 +101,7 @@ export class Soundscape {
     if (next === this.track) return;
     this.track = next;
     this.step = 0;
+    this.effectIndex = 0;
     this.stopBgm();
     this.update();
   }
@@ -130,12 +140,21 @@ export class Soundscape {
   tone(frequency, duration, gain = 0.05, delay = 0, options = {}) {
     if (!this.context || this.context.state !== "running" || document.hidden)
       return;
+    // Reclaim finished graphs even if the browser omitted their ended events.
+    for (const voice of [...this.voices])
+      if (voice.stopTime <= this.context.currentTime) voice.dispose();
     // Also bound live nodes if a browser stops delivering ended events.
     if (this.voices.length >= 96) return;
+    const channel = options.channel || "sfx";
+    if (
+      channel === "sfx" &&
+      this.voices.filter((voice) => voice.channel === "sfx").length >=
+        SFX_VOICE_LIMIT
+    )
+      return;
     let oscillator, envelope, voice;
     try {
       const time = this.context.currentTime + delay;
-      const channel = options.channel || "sfx";
       const attack = Math.min(options.attack || 0.025, duration / 2);
       oscillator = this.context.createOscillator();
       envelope = this.context.createGain();
@@ -242,16 +261,40 @@ export class Soundscape {
     }, 60000 / this.track.bpm);
   }
   effect(kind) {
-    if (!this.settings.sfxEnabled || document.hidden) return;
-    const v = 0.14;
-    if (kind === "blocked") this.tone(196, 0.22, v * 0.6);
-    else if (kind === "hint") {
-      this.tone(523.25, 0.55, v);
-      this.tone(659.25, 0.7, v, 0.12);
-    } else if (kind === "complete") {
-      [523.25, 659.25, 783.99, 1046.5].forEach((f, i) =>
-        this.tone(f, 1.3, v, i * 0.14),
+    if (
+      !this.settings.sfxEnabled ||
+      !this.settings.sfxVolume ||
+      document.hidden ||
+      this.context?.state !== "running"
+    )
+      return;
+    for (const voice of [...this.voices])
+      if (voice.stopTime <= this.context.currentTime) voice.dispose();
+    const removal = !["blocked", "hint", "complete"].includes(kind);
+    const notes = effectEvents(
+      this.track,
+      Math.max(0, this.step - 1),
+      kind,
+      this.effectIndex,
+    );
+    const active = this.voices.filter(
+      (voice) => voice.channel === "sfx",
+    ).length;
+    // Leave room for feedback cues during rapid successful taps. Admission is
+    // per motif, so a nearly full channel never plays half a completion cue.
+    if (
+      active + notes.length >
+      (removal ? REMOVAL_VOICE_LIMIT : SFX_VOICE_LIMIT)
+    )
+      return;
+    for (const note of notes)
+      this.tone(
+        440 * 2 ** ((note.midi - 69) / 12),
+        note.duration,
+        note.gain,
+        note.delay,
+        { ...note, channel: "sfx" },
       );
-    } else this.tone(440 + Math.random() * 160, 0.4, v * 0.7);
+    if (removal) this.effectIndex = (this.effectIndex + 1) % 4;
   }
 }

@@ -104,6 +104,34 @@ test('head rays cross void cells and still see another lobe of a masked board', 
   assert.equal(solveBoard(board).solvable, true);
 });
 
+test('rays cross a genuinely enclosed hole in all four directions', () => {
+  const source = boardOf([], 6, 6);
+  for (let y = 0; y < 6; y += 1) {
+    for (let x = 0; x < 6; x += 2) {
+      if (x === 2 && (y === 2 || y === 3)) continue;
+      source.arrows.push(arrow(`${x},${y}`, [[x, y], [x + 1, y]]));
+    }
+  }
+  source.mask = source.arrows.flatMap((item) => item.cells);
+  for (let turns = 0; turns < 4; turns += 1) {
+    const rotate = ([x, y]) => {
+      for (let turn = 0; turn < turns; turn += 1) [x, y] = [5 - y, x];
+      return [x, y];
+    };
+    const board = { ...source, mask: source.mask.map(rotate),
+      arrows: source.arrows.map((item) => ({ ...item, cells: item.cells.map(rotate) })) };
+    const ids = board.arrows.map((item) => item.id);
+    assert.equal(validateBoard(board).valid, true);
+    assert.deepEqual(independentBlockers(board, ids, '0,2'), ['4,2']);
+    assert.deepEqual(canRemove(board, ids, '0,2'), { allowed: false, blockers: ['4,2'] });
+    assert.equal(getRemovable(board, ids).includes('0,2'), false);
+    assert.deepEqual(canRemove(board, ids.filter((id) => id !== '4,2'), '0,2'), { allowed: true, blockers: [] });
+    const solution = solveBoard(board);
+    assert.equal(solution.solvable, true);
+    assert.ok(solution.order.indexOf('4,2') < solution.order.indexOf('0,2'));
+  }
+});
+
 test('detects cyclic dependencies through both graph and direct greedy solvers', () => {
   const board = boardOf([arrow('a', [[0, 0], [1, 0]]), arrow('b', [[3, 0], [2, 0]])], 4, 2);
   assert.match(validateBoard(board).errors.join(' '), /cycle/);
@@ -236,10 +264,32 @@ test('v3 saved square geometry remains playable with its original fingerprint an
   assert.equal(JSON.stringify(saved), exactSave);
 });
 
+test('v4 saved masked geometry keeps its original paths, mask and fingerprint without regeneration', () => {
+  // Literal generator 4.0.0 normal / legacy-v4 / circle / size 20 routes from base 6c7153d.
+  const paths = [[44,43,42,62,63,83,82,102,103,104,124,123,122,142,141,121,120,140,160,180,200,220,240,260,261,262,282,302,322,342],[195,196,176,177,197,217,216,236,237,257,258,238,218,198,178,158,157,156,155,154],[131,130,150,151,171,170,169,149,148],[293,313,333,334],[153,152,172,173,193,192,191,211,231,230,210,190,189,209,229,249,248,247,227,228,208,188,168,167,166,165,164,144,143],[187,207,206,205,225,226],[132,133,134,135,115,114,113,112,111,91,71,70,50,51,52,53,54,55,75,74,73,72,92,93,94,95,96,76,56],[185,186],[90,89,69,49,48,47,27,28,29,30,31,32,33],[184,204,224,244,243,242,241,221,201,181,161,162,182,202,222,223,203,183,163],[110,109,129,128],[255,256,276,275,295,296,297,277,278,279],[308,328,327,307,287,267,266,286,306,326,346,347,348,368,367,366],[57,77,97,117,116,136,137,138,139,159,179,199,219,239,259],[354,353,373,393,392,391,371,372,352,332,331],[125,126,106,105,85,84,64],[246,245,265,285,305,304,284,264,263,283,303,323,324,325,345,344,343],[9,8,7,6,26,46,66,86,87,67,68,88,108,107,127,147,146,145],[175,174,194,214,215,235,234,233,213,212,232,252,253,273,272,292,312],[351,350,330,329,349,369,370,390,389,388,387,386],[288,268,269,289,309,310,290,270,250,251,271,291,311],[65,45],[13,12,11,10],[336,335,355,356,357,337,317,316,315,314,294,274,254]];
+  const point = (cell) => [cell % 20, Math.floor(cell / 20)];
+  const saved = { width: 20, height: 20, shape: 'circle', difficulty: 'normal', seed: 'legacy-v4',
+    rulesVersion: '1.0.0', generatorVersion: '4.0.0', difficultyProfileVersion: '3.0.0',
+    fingerprint: 'aj1-6b452e4e59d63335e1406476d3d3790d',
+    mask: paths.flat().sort((a, b) => a - b).map(point),
+    arrows: paths.map((path, index) => ({ id: 'a' + index.toString(36), cells: path.map(point) })) };
+  const exactSave = JSON.stringify(saved);
+  assert.deepEqual(validateBoard(saved), { valid: true, errors: [] });
+  assert.equal(solveBoard(saved).solvable, true);
+  assert.equal(boardFingerprint(saved), saved.fingerprint);
+  const remaining = saved.arrows.map((item) => item.id);
+  for (const id of solveBoard(saved).order) {
+    assert.equal(canRemove(saved, remaining, id).allowed, true);
+    remaining.splice(remaining.indexOf(id), 1);
+  }
+  assert.equal(JSON.stringify(saved), exactSave);
+});
+
 test('every difficulty shares all sizes and size selection depends only on the seed', () => {
   const sizes = new Set();
   const shapes = new Set();
-  assert.deepEqual(BOARD_SHAPES.map((shape) => shape.id), ['square', 'circle', 'diamond', 'cross', 'heart']);
+  assert.deepEqual(BOARD_SHAPES.map((shape) => shape.id), ['square', 'circle', 'diamond', 'cross', 'heart', 'ring']);
+  assert.equal(BOARD_SHAPES.find((shape) => shape.id === 'ring').label, 'ドーナツ');
   assert.ok(Object.isFrozen(BOARD_SHAPES));
   for (const shape of BOARD_SHAPES) { assert.ok(Object.isFrozen(shape)); assert.equal(typeof shape.label, 'string'); }
   for (const profile of Object.values(DIFFICULTIES)) {
@@ -266,7 +316,7 @@ test('every difficulty shares all sizes and size selection depends only on the s
   assert.deepEqual([...shapes].sort(), BOARD_SHAPES.map((shape) => shape.id).sort());
   for (const size of [0, 19, 21, 64, '20', null, NaN, Infinity]) assert.throws(() => generateBoard('easy', 'invalid', { size }), RangeError);
   for (const options of [null, [], 20]) assert.throws(() => generateBoard('easy', 'invalid', options), TypeError);
-  for (const shape of ['ring', '__proto__', {}, 1, null]) assert.throws(() => generateBoard('easy', 'invalid', { shape }), RangeError);
+  for (const shape of ['annulus', '__proto__', {}, 1, null]) assert.throws(() => generateBoard('easy', 'invalid', { shape }), RangeError);
 });
 
 test('100 seeds at each size and difficulty fill the grid, independently solve and separate choice pressure', (context) => {
@@ -365,7 +415,7 @@ test('25 seeds per shape, size and difficulty cover connected masks and independ
           maximumAttempts = Math.max(maximumAttempts, board.generationMetrics.boardAttempts);
           assert.equal(board.width, size); assert.equal(board.height, size); assert.equal(board.shape, shape);
           assert.deepEqual(validateBoard(board), { valid: true, errors: [] });
-          assert.equal(board.rulesVersion, '1.0.0'); assert.equal(board.generatorVersion, '4.0.0');
+          assert.equal(board.rulesVersion, '1.0.0'); assert.equal(board.generatorVersion, '4.1.0');
           assert.equal(board.difficultyProfileVersion, '3.0.0');
           assert.equal(board.fingerprint, boardFingerprint(board));
           assert.equal(fingerprints.has(board.fingerprint), false); fingerprints.add(board.fingerprint);
@@ -392,6 +442,36 @@ test('25 seeds per shape, size and difficulty cover connected masks and independ
           for (const [x, y] of board.mask) {
             const tx = x - x % 2, ty = y - y % 2;
             for (const [ox, oy] of [[0, 0], [0, 1], [1, 0], [1, 1]]) assert.ok(mask.has((tx + ox) + ',' + (ty + oy)));
+          }
+          if (shape === 'ring') {
+            // Flood only void cells from the exterior, without using the generator's radius formula.
+            const exterior = new Set(), voidQueue = [];
+            for (let edge = 0; edge < size; edge += 1) {
+              voidQueue.push([edge, 0], [edge, size - 1], [0, edge], [size - 1, edge]);
+            }
+            for (let i = 0; i < voidQueue.length; i += 1) {
+              const [x, y] = voidQueue[i], key = x + ',' + y;
+              if (x < 0 || y < 0 || x >= size || y >= size || mask.has(key) || exterior.has(key)) continue;
+              exterior.add(key);
+              voidQueue.push([x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]);
+            }
+            const hole = new Set();
+            for (let y = 0; y < size; y += 1) for (let x = 0; x < size; x += 1) {
+              const key = x + ',' + y;
+              if (!mask.has(key) && !exterior.has(key)) hole.add(key);
+            }
+            assert.equal(mask.size, { 20: 272, 24: 384, 28: 528, 32: 704 }[size]);
+            assert.equal(hole.size, { 20: 48, 24: 64, 28: 96, 32: 128 }[size]);
+            const center = [size / 2, size / 2], reached = new Set(), holeQueue = [center];
+            assert.ok(hole.has(center.join(',')));
+            for (let i = 0; i < holeQueue.length; i += 1) {
+              const [x, y] = holeQueue[i], key = x + ',' + y;
+              if (!hole.has(key) || reached.has(key)) continue;
+              reached.add(key);
+              assert.equal(occupied.has(key), false);
+              holeQueue.push([x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]);
+            }
+            assert.equal(reached.size, hole.size); // Exactly one enclosed, central void.
           }
           const { solvable, order, metrics } = solveBoard(board);
           assert.equal(solvable, true); assert.equal(metrics.dagSolvable, true); assert.equal(metrics.greedySolvable, true);
@@ -445,7 +525,7 @@ test('25 seeds per shape, size and difficulty cover connected masks and independ
       }
     }
   }
-  assert.equal(fingerprints.size, 2000);
+  assert.equal(fingerprints.size, 2400);
 });
 
 test('worker returns a board or an error with the original request ID', async () => {

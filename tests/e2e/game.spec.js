@@ -3,7 +3,7 @@ import { getRemovable, canRemove, solveBoard } from "../../js/engine.js";
 import { trackForBoard, musicEvents } from "../../js/music.js";
 import { mkdir } from "node:fs/promises";
 const evidence =
-  "C:/Users/aqua_/Documents/Codex/2026-10-22/Arrow-Journey-0.4.0";
+  "C:/Users/aqua_/Documents/Codex/2026-10-22/Arrow-Journey-0.5.0";
 async function readProfile(page) {
   return page.evaluate(
     () =>
@@ -33,7 +33,7 @@ async function activate(page, id) {
   await page.locator(`#board [data-arrow-id="${id}"]`).press("Enter");
 }
 
-test("five selectable shapes fill only playable cells and retain shape, dots and geometry on resume", async ({
+test("six selectable shapes fill only playable cells and retain shape, dots and geometry on resume", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 354, height: 780 });
@@ -48,6 +48,7 @@ test("five selectable shapes fill only playable cells and retain shape, dots and
     ["diamond", "ひし形"],
     ["cross", "十字"],
     ["heart", "ハート"],
+    ["ring", "ドーナツ"],
   ]) {
     await page
       .getByRole("combobox", { name: "形", exact: true })
@@ -172,6 +173,235 @@ test("real AudioContext schedules the board-selected score and the same score af
   await page.getByRole("button", { name: /つづきから/ }).click();
   expect((await readProfile(page)).activeGame.playId).toBe(game.playId);
   await expectScore(game.playId);
+  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await page.locator("#bgm-enabled").uncheck();
+  await expect
+    .poll(async () => (await readProfile(page)).settings.bgmEnabled.value)
+    .toBe(false);
+  await page.getByRole("button", { name: "閉じる", exact: true }).click();
+  await page.evaluate(() => {
+    window.qaNotes = [];
+  });
+  const current = (await readProfile(page)).activeGame;
+  await activate(page, getRemovable(current.board, current.remainingIds)[0]);
+  await expect.poll(() => page.evaluate(() => window.qaNotes.length)).toBe(1);
+  const effect = await page.evaluate(() => window.qaNotes[0]);
+  const chordFrequencies = trackForBoard(current.playId)
+    .chords.flat()
+    .map((midi) => 440 * 2 ** ((midi + 12 - 69) / 12));
+  expect(
+    chordFrequencies.some(
+      (frequency) => Math.abs(frequency - effect.frequency) < 0.01,
+    ),
+  ).toBe(true);
+});
+
+test("mistakes are optional in play and completion, persist, and no-miss statistics are absent", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await start(page);
+  const game = (await readProfile(page)).activeGame;
+  await expect(page.locator("#misses")).toBeHidden();
+  const blocked = game.remainingIds.find(
+    (id) => !canRemove(game.board, game.remainingIds, id).allowed,
+  );
+  await activate(page, blocked);
+  await expect(page.locator("#misses")).toHaveText("1");
+  await expect(page.locator("#misses")).toBeHidden();
+  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await page.locator("#show-mistakes").check();
+  await expect(page.locator("#misses")).toBeVisible();
+  await expect
+    .poll(async () => (await readProfile(page)).settings.showMistakes.value)
+    .toBe(true);
+  await page.screenshot({ path: evidence + "/mistakes-setting.png" });
+  await page.getByRole("button", { name: "閉じる", exact: true }).click();
+  await page.reload();
+  await page.getByRole("button", { name: /つづきから/ }).click();
+  await expect(page.locator("#misses")).toBeVisible();
+  await expect(page.locator("#misses")).toHaveText("1");
+  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await page.locator("#show-mistakes").uncheck();
+  await expect(page.locator("#misses")).toBeHidden();
+  await page.getByRole("button", { name: "閉じる", exact: true }).click();
+  for (const id of solveBoard(game.board).order) {
+    await activate(page, id);
+    await expect(page.locator(`#board [data-arrow-id="${id}"]`)).toHaveCount(0);
+  }
+  await expect(page.locator(".completion")).toBeVisible();
+  expect(await page.locator(".completion").innerText()).not.toContain("ミス");
+  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await page.locator("#show-mistakes").check();
+  await page.getByRole("button", { name: "閉じる", exact: true }).click();
+  expect(await page.locator(".completion").innerText()).toContain("ミス 1");
+  await page.getByRole("button", { name: "成績", exact: true }).click();
+  await expect(page.getByRole("dialog")).not.toContainText(/ノーミス|累計ミス/);
+  expect(Object.values((await readProfile(page)).clears)[0].misses).toBe(1);
+});
+
+test("trusted mouse and touch holds show neutral guides across a ring hole, never remove, and leave quick taps and drag usable", async ({
+  browser,
+}) => {
+  for (const mobile of [false, true]) {
+    const context = await browser.newContext({
+      baseURL: test.info().project.use.baseURL,
+      viewport: mobile
+        ? { width: 354, height: 780 }
+        : { width: 1440, height: 1000 },
+      hasTouch: mobile,
+      isMobile: mobile,
+    });
+    try {
+      const page = await context.newPage(),
+        errors = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto("/");
+      await page
+        .getByRole("combobox", { name: "形", exact: true })
+        .selectOption("ring");
+      await start(page, "normal");
+      const game = (await readProfile(page)).activeGame;
+      const mask = new Set(game.board.mask.map(([x, y]) => `${x},${y}`));
+      const target = game.board.arrows.find((arrow) => {
+        const [hx, hy] = arrow.cells.at(-1),
+          [px, py] = arrow.cells.at(-2),
+          dx = hx - px,
+          dy = hy - py;
+        for (
+          let x = hx + dx, y = hy + dy;
+          x >= 0 && x < game.board.width && y >= 0 && y < game.board.height;
+          x += dx, y += dy
+        ) {
+          if (
+            !mask.has(`${x},${y}`) &&
+            Math.hypot(
+              x + 0.5 - game.board.width / 2,
+              y + 0.5 - game.board.height / 2,
+            ) <
+              game.board.width * 0.2
+          )
+            return true;
+        }
+        return false;
+      });
+      expect(target).toBeTruthy();
+      const rect = await page.locator("#board svg").boundingBox();
+      const point = ([x, y]) => ({
+        x: rect.x + ((x + 0.85) * rect.width) / game.board.width,
+        y: rect.y + ((y + 0.85) * rect.height) / game.board.height,
+      });
+      const cdp = mobile ? await context.newCDPSession(page) : null;
+      const down = async (point) =>
+        mobile
+          ? cdp.send("Input.dispatchTouchEvent", {
+              type: "touchStart",
+              touchPoints: [{ ...point, id: 31 }],
+            })
+          : (await page.mouse.move(point.x, point.y), page.mouse.down());
+      const up = async () =>
+        mobile
+          ? cdp.send("Input.dispatchTouchEvent", {
+              type: "touchEnd",
+              touchPoints: [],
+            })
+          : page.mouse.up();
+      const tap = async (point) =>
+        mobile
+          ? page.touchscreen.tap(point.x, point.y)
+          : page.mouse.click(point.x, point.y);
+      await down(point(target.cells[0]));
+      await expect(page.locator(".board-ray-guide")).toHaveCount(1);
+      expect(
+        await page
+          .locator(".board-ray-guide")
+          .evaluate((line) =>
+            Math.max(line.getBBox().width, line.getBBox().height),
+          ),
+      ).toBeGreaterThan(0);
+      const head = target.cells.at(-1),
+        previous = target.cells.at(-2);
+      await expect(page.locator(".board-ray-guide")).toHaveAttribute(
+        "x1",
+        String(head[0] + 0.5),
+      );
+      await expect(page.locator(".board-ray-guide")).toHaveAttribute(
+        "y1",
+        String(head[1] + 0.5),
+      );
+      await expect(page.locator(".board-ray-guide")).toHaveAttribute(
+        "x2",
+        String(
+          head[0] > previous[0]
+            ? game.board.width
+            : head[0] < previous[0]
+              ? 0
+              : head[0] + 0.5,
+        ),
+      );
+      await expect(page.locator(".board-ray-guide")).toHaveAttribute(
+        "y2",
+        String(
+          head[1] > previous[1]
+            ? game.board.height
+            : head[1] < previous[1]
+              ? 0
+              : head[1] + 0.5,
+        ),
+      );
+      await page.screenshot({
+        path: evidence + `/ring-hold-${mobile ? "touch" : "mouse"}.png`,
+      });
+      await up();
+      await expect(page.locator(".board-ray-guide")).toHaveCount(0);
+      expect((await readProfile(page)).activeGame.remainingIds).toEqual(
+        game.remainingIds,
+      );
+      expect((await readProfile(page)).activeGame.misses).toBe(0);
+      const free = getRemovable(game.board, game.remainingIds)[0];
+      await tap(
+        point(game.board.arrows.find((arrow) => arrow.id === free).cells[0]),
+      );
+      await expect(page.locator("#remaining")).toHaveText(
+        String(game.remainingIds.length - 1),
+      );
+      const dragArrow = game.board.arrows.find((arrow) => arrow.id !== free),
+        from = point(dragArrow.cells[0]),
+        to = { x: from.x + 20, y: from.y + 15 };
+      await down(from);
+      if (mobile)
+        await cdp.send("Input.dispatchTouchEvent", {
+          type: "touchMove",
+          touchPoints: [{ ...to, id: 31 }],
+        });
+      else await page.mouse.move(to.x, to.y, { steps: 3 });
+      await page.waitForTimeout(500); // Pass the real hold threshold after cancelling by drag.
+      await expect(page.locator(".board-ray-guide")).toHaveCount(0);
+      await up();
+      expect((await readProfile(page)).activeGame.remainingIds).toHaveLength(
+        game.remainingIds.length - 1,
+      );
+      expect((await readProfile(page)).activeGame.misses).toBe(0);
+      await page.getByRole("button", { name: "盤面を全体表示" }).click();
+      const hole = point([
+        Math.floor(game.board.width / 2),
+        Math.floor(game.board.height / 2),
+      ]);
+      expect(
+        mask.has(
+          `${Math.floor(game.board.width / 2)},${Math.floor(game.board.height / 2)}`,
+        ),
+      ).toBe(false);
+      await down(hole);
+      await page.waitForTimeout(500);
+      await expect(page.locator(".board-ray-guide")).toHaveCount(0);
+      await up();
+      expect((await readProfile(page)).activeGame.misses).toBe(0);
+      expect(errors).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  }
 });
 test("UI, blocked tap, drag exclusion, hint persistence and new-game replacement", async ({
   page,

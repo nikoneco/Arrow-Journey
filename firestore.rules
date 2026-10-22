@@ -19,38 +19,54 @@ service cloud.firestore {
         && difficulty(d.difficulty) && count(d.misses) && d.hintsUsed is int
         && d.hintsUsed >= 0 && d.hintsUsed <= 3 && stamp(d.completedAt);
     }
-    function setting(v, volume) {
-      return v is map && v.keys().hasAll(['value','updatedAt','deviceId'])
-        && v.keys().hasOnly(['value','updatedAt','deviceId'])
-        && stamp(v.updatedAt) && identifier(v.deviceId)
-        && ((volume && v.value is number && v.value >= 0 && v.value <= 1) || (!volume && v.value is bool));
+    function settingMetadata(v) {
+      return v is map && v.keys().hasOnly(['value','updatedAt','deviceId'])
+        && stamp(v.updatedAt) && identifier(v.deviceId);
+    }
+    function booleanSetting(v) {
+      return settingMetadata(v) && v.value is bool;
+    }
+    function volumeSetting(v) {
+      let value = v.value;
+      return settingMetadata(v) && value is number && value >= 0 && value <= 1;
     }
     function settings(d) {
       return d.keys().hasAll(['bgmEnabled','sfxEnabled','bgmVolume','sfxVolume','reducedMotion'])
-        && d.keys().hasOnly(['bgmEnabled','sfxEnabled','bgmVolume','sfxVolume','reducedMotion','arrowTheme','colorMode'])
-        && setting(d.bgmEnabled,false) && setting(d.sfxEnabled,false)
-        && setting(d.bgmVolume,true) && setting(d.sfxVolume,true) && setting(d.reducedMotion,false)
-        && (!d.keys().hasAny(['arrowTheme']) || themeSetting(d.arrowTheme))
-        && (!d.keys().hasAny(['colorMode']) || modeSetting(d.colorMode));
+        && d.keys().hasOnly(['bgmEnabled','sfxEnabled','bgmVolume','sfxVolume','reducedMotion','arrowTheme','colorMode','showMistakes'])
+        && booleanSetting(d.bgmEnabled) && booleanSetting(d.sfxEnabled)
+        && volumeSetting(d.bgmVolume) && volumeSetting(d.sfxVolume) && booleanSetting(d.reducedMotion)
+        && (!('arrowTheme' in d) || themeSetting(d.arrowTheme))
+        && (!('colorMode' in d) || modeSetting(d.colorMode))
+        && (!('showMistakes' in d) || booleanSetting(d.showMistakes));
     }
     function themeSetting(v) {
-      return v is map && v.keys().hasAll(['value','updatedAt','deviceId'])
-        && v.keys().hasOnly(['value','updatedAt','deviceId'])
-        && stamp(v.updatedAt) && identifier(v.deviceId)
-        && v.value is string && v.value in ['forest','ocean','grape','ember'];
+      return settingMetadata(v) && v.value in ['forest','ocean','grape','ember'];
     }
     function modeSetting(v) {
-      return v is map && v.keys().hasAll(['value','updatedAt','deviceId'])
-        && v.keys().hasOnly(['value','updatedAt','deviceId'])
-        && stamp(v.updatedAt) && identifier(v.deviceId)
-        && v.value is string && v.value in ['light','dark','system'];
+      return settingMetadata(v) && v.value in ['light','dark','system'];
     }
-    function newer(a,b) { return a == b || a.updatedAt > b.updatedAt || (a.updatedAt == b.updatedAt && a.deviceId > b.deviceId); }
+    function newer(a,b) {
+      let at = a.updatedAt;
+      let bt = b.updatedAt;
+      // Called only for fields in affectedKeys; identical fields need no check.
+      return at > bt || (at == bt && a.deviceId > b.deviceId);
+    }
     function appearancePreserved(next,old,key) {
       // Legacy writes are valid until the setting exists; patches preserve it.
       // A legacy full replacement must never erase an already chosen appearance.
-      return !old.keys().hasAny([key])
-        || (next.keys().hasAny([key]) && newer(next[key],old[key]));
+      return !(key in old) || (key in next && newer(next[key],old[key]));
+    }
+    function preferencesUpdate(next,old) {
+      let changed = next.diff(old).affectedKeys();
+      return settings(next)
+        && (!('bgmEnabled' in changed) || newer(next.bgmEnabled,old.bgmEnabled))
+        && (!('sfxEnabled' in changed) || newer(next.sfxEnabled,old.sfxEnabled))
+        && (!('bgmVolume' in changed) || newer(next.bgmVolume,old.bgmVolume))
+        && (!('sfxVolume' in changed) || newer(next.sfxVolume,old.sfxVolume))
+        && (!('reducedMotion' in changed) || newer(next.reducedMotion,old.reducedMotion))
+        && (!('arrowTheme' in changed) || appearancePreserved(next,old,'arrowTheme'))
+        && (!('colorMode' in changed) || appearancePreserved(next,old,'colorMode'))
+        && (!('showMistakes' in changed) || appearancePreserved(next,old,'showMistakes'));
     }
     match /users/{uid}/playSummaries/{playId} {
       allow read: if mine(uid);
@@ -69,14 +85,7 @@ service cloud.firestore {
     match /users/{uid}/preferences/app {
       allow read: if mine(uid);
       allow create: if mine(uid) && settings(request.resource.data);
-      allow update: if mine(uid) && settings(request.resource.data)
-        && newer(request.resource.data.bgmEnabled,resource.data.bgmEnabled)
-        && newer(request.resource.data.sfxEnabled,resource.data.sfxEnabled)
-        && newer(request.resource.data.bgmVolume,resource.data.bgmVolume)
-        && newer(request.resource.data.sfxVolume,resource.data.sfxVolume)
-        && newer(request.resource.data.reducedMotion,resource.data.reducedMotion)
-        && appearancePreserved(request.resource.data,resource.data,'arrowTheme')
-        && appearancePreserved(request.resource.data,resource.data,'colorMode');
+      allow update: if mine(uid) && preferencesUpdate(request.resource.data,resource.data);
     }
     match /{document=**} { allow read, write: if false; }
   }

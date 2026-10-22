@@ -1,6 +1,6 @@
 /** Arrow Journey rules and deterministic generation. No browser or storage dependencies. */
 export const RULES_VERSION = '1.0.0';
-export const GENERATOR_VERSION = '4.0.0';
+export const GENERATOR_VERSION = '4.1.0';
 export const DIFFICULTY_PROFILE_VERSION = '3.0.0';
 
 const MAX_DIMENSION = 64;
@@ -9,7 +9,7 @@ const MAX_BOARD_ATTEMPTS = 16;
 const BOARD_SIZES = Object.freeze([20, 24, 28, 32]);
 export const BOARD_SHAPES = Object.freeze([
   { id: 'square', label: '正方形' }, { id: 'circle', label: '円' }, { id: 'diamond', label: 'ひし形' },
-  { id: 'cross', label: '十字' }, { id: 'heart', label: 'ハート' },
+  { id: 'cross', label: '十字' }, { id: 'heart', label: 'ハート' }, { id: 'ring', label: 'ドーナツ' },
 ].map(Object.freeze));
 
 // width/height are legacy metadata defaults; sizes defines every profile's actual range.
@@ -344,6 +344,9 @@ function playableMask(size, shape) {
       const x = (tx + 0.5) / tileSize, y = (ty + 0.5) / tileSize;
       const inShape = shape === 'square'
         || (shape === 'circle' && dx * dx + dy * dy <= tileSize * tileSize)
+        // Both radii use tile centers, keeping a connected ring of complete 2x2 tiles.
+        || (shape === 'ring' && dx * dx + dy * dy <= tileSize * tileSize
+          && dx * dx + dy * dy > (tileSize * 0.40) ** 2)
         || (shape === 'diamond' && Math.abs(dx) + Math.abs(dy) <= tileSize)
         || (shape === 'cross' && (Math.abs(dx) <= tileSize * 0.38 || Math.abs(dy) <= tileSize * 0.38))
         || (shape === 'heart' && (((x - 0.27) ** 2 + (y - 0.28) ** 2 <= 0.27 ** 2)

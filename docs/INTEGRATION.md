@@ -19,7 +19,7 @@ profile = await store.write("guest", nextProfile, profile.revision);
 
 0.4.0の新盤面はactiveGame.boardに形状IDと元の全maskを保存する。消去・再開でmaskを縮めたり再生成したりしない。maskのない旧盤面も元のセル列・fingerprintで再開する。形状・mask・曲のデータをクラウドpayloadへ追加しない。BGMは既存playIdから端末内で選曲し、同じ盤面の再開で同じ曲になる。
 
-設定項目は `bgmEnabled,sfxEnabled,bgmVolume,sfxVolume,reducedMotion,arrowTheme,colorMode`。`updateSettings(profile,patch,deviceId,now)`を使い、各項目を `{value,updatedAt,deviceId}` として記録する。今回の実装では項目ごとの更新時刻、同時刻ならdeviceIdの辞書順で統合する。仕様書の提案「クラウドの確定順」とは異なる実装定義であり、端末時計のずれが同項目の競合へ影響する。設定を再操作すると、既知の最大時刻より新しい時刻を割り当てる。
+設定項目は `bgmEnabled,sfxEnabled,bgmVolume,sfxVolume,reducedMotion,arrowTheme,colorMode,showMistakes`。showMistakesは任意のbooleanで既定false。旧5/6/7項目はreadの複製に不足分を補完し、元の保存レコード・途中盤面・revisionは書き換えない。`updateSettings(profile,patch,deviceId,now)`を使い、各項目を `{value,updatedAt,deviceId}` として記録する。今回の実装では項目ごとの更新時刻、同時刻ならdeviceIdの辞書順で統合する。仕様書の提案「クラウドの確定順」とは異なる実装定義であり、端末時計のずれが同項目の競合へ影響する。設定を再操作すると、既知の最大時刻より新しい時刻を割り当てる。
 
 ## 任意のGoogle連携
 
@@ -89,6 +89,16 @@ Firestore Standardのdefaultデータベースを東京 `asia-northeast1` に本
 Googleアカウントへのログインは利用者から完了報告あり。Arrow JourneyアプリへのOAuthポップアップ選択と実同期は別の確認で、現在利用者のアカウント選択を依頼中。スマートフォン実機のタップ・音・インストール、物理的に別の端末間の同期は未確認。
 
 ## ローカル検証
+
+0.5.0 (2026-10-22): 450msの長押しで中立な直線ガイドを表示し、指離しでは除去しない。任意の占有マスから先端→外枠まで表示し、穴を跨ぐ。ドラッグ・ピンチ・ズーム・キャンセル・画面非表示/破棄で解除し、保存による同一盤面再描画は有効な操作を保持する。ドーナツを含む6形状と旧v1〜v4保存互換、4,000盤面の全被覆・独立2合法順での全消去を確認。
+
+ミス数は既定で非表示。showMistakesでプレイ中とクリア時の表示を切り替え、成績からノーミスクリアも除外する。内部のミス記録・summary/clear形式は保持。旧5/6/7項目のIDBとクラウド設定を8項目へ補完し、既存の途中盤面・revision・選択済み設定を保持する。旧0.4.0以前のJSは新しいキーを拒否するため、新版で8項目を保存・同期した後の旧タブは「更新」または再読込が必要。保存データを初期化しない。
+
+Node136成功・Firestore Emulator専用1skip、ローカルChrome19試験成功。マウス/354pxタッチで実入力の長押し、穴を越えるガイド、離した後の無操作、次のタップ、ドラッグ、穴タップを確認。ミス表示の即時反映・再読込・クリア表示と成績項目の非表示、実AudioContextでBGM停止中の和音に合う効果音も確認。Browser skillは一覧にないため既存Playwrightを使用。iPhone/iPadのホーム画面PWA実機と聴感は別の確認。
+
+効果音は現在の曲・和音の構成音を用い、通常除去4声/全効果音8声を上限にする。BGMの進行・音声経路を変更しない。18音声ユニット試験で全曲・全和音・各効果音、BGM停止、発音上限と解放を確認。
+
+設定8項目の全体検証と更新順序を専用demo-arrow-journey、127.0.0.1限定のFirestore Emulatorと実SDKで11試験成功（skip0）。8項目同時更新・同時刻の端末ID順・同一内容再送、各項目の巻き戻し/削除拒否、欠損メタデータ・型・範囲・所有者境界を確認。新項目追加時のルール評価上限問題は、共通メタデータと値検証を分離し、変更項目だけ更新順序を検査して解消。全体の型検証と権限制限は維持する。[Firebase公式のフィールド検証](https://firebase.google.com/docs/firestore/security/rules-fields)に従い、欠損プロパティも拒否する。本番の試験データ書込みは行わず、公開ルール反映・公開PWA・実アカウント同期は別の証拠として扱う。
 
 0.4.0 (2026-10-22): 正方形・円・ひし形・十字・ハートを選択またはランダム生成。形状・サイズ・難易度を分離し、shape mask内を完全に埋める。初期候補数、途中候補数、相対的な依存深さの採用条件を保持。合法な除去で新しい妨害は生まれないルールのため、難しさは主に合法な矢印を見つける過程にある。時間制限や失敗による終了は加えない。
 

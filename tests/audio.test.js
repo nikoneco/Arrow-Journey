@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Soundscape } from "../js/audio.js";
-import { MUSIC_TRACKS, musicEvents, trackForBoard } from "../js/music.js";
+import {
+  MUSIC_TRACKS,
+  effectEvents,
+  musicEvents,
+  trackForBoard,
+} from "../js/music.js";
 
 const settings = {
   bgmEnabled: true,
@@ -225,6 +230,159 @@ test("scores repeat cleanly, stay gentle, and include different rhythms and timb
   assert.equal(bells[0].attack, 0.04);
   assert.equal(bells[1].attack, 0.04);
   assert.equal(bells[1].gain, 0.0015);
+});
+
+test("every effect uses gentle chord tones in all five arrangements without changing scores", () => {
+  for (const track of MUSIC_TRACKS) {
+    const length = track.meter * track.chords.length;
+    const score = Array.from({ length }, (_, step) => musicEvents(track, step));
+    const source = JSON.stringify(track);
+    for (let step = 0; step < length; step++) {
+      const chord = track.chords[Math.floor(step / track.meter)];
+      for (const kind of ["remove", "blocked", "hint", "complete"])
+        for (let variation = 0; variation < 4; variation++) {
+          const notes = effectEvents(track, step, kind, variation);
+          assert.deepEqual(effectEvents(track, step, kind, variation), notes);
+          assert.deepEqual(
+            effectEvents(track, step + length, kind, variation),
+            notes,
+          );
+          for (const note of notes) {
+            assert.ok(chord.some((midi) => (note.midi - midi) % 12 === 0));
+            assert.ok(note.gain > 0 && note.gain <= 0.022);
+            assert.ok(note.duration > note.attack && note.duration <= 1.3);
+            assert.equal(note.type, "sine");
+          }
+        }
+    }
+    assert.equal(JSON.stringify(track), source);
+    assert.deepEqual(
+      Array.from({ length }, (_, step) => musicEvents(track, step)),
+      score,
+    );
+  }
+});
+
+test("effects follow the currently sounding chord without advancing or restarting BGM", async (t) => {
+  const world = audioWorld(t);
+  const audio = new Soundscape();
+  audio.configure(settings);
+  await audio.unlock();
+  for (const track of MUSIC_TRACKS) {
+    audio.setBoard(boardForTrack(track));
+    for (let chordIndex = 0; chordIndex < track.chords.length; chordIndex++) {
+      const chord = track.chords[chordIndex];
+      assert.equal(Math.floor((audio.step - 1) / track.meter), chordIndex);
+      for (const kind of ["remove", "blocked", "hint", "complete"]) {
+        const step = audio.step;
+        const timer = audio.timer;
+        const bgm = audio.voices.filter((voice) => voice.channel === "bgm");
+        audio.effect(kind);
+        const effects = audio.voices.filter((voice) => voice.channel === "sfx");
+        assert.equal(
+          effects.length,
+          kind === "complete" ? 4 : kind === "hint" ? 2 : 1,
+        );
+        for (const { oscillator, envelope } of effects) {
+          const midi = 69 + 12 * Math.log2(oscillator.frequency.value / 440);
+          assert.ok(chord.some((tone) => Math.abs((midi - tone) % 12) < 1e-9));
+          assert.equal(envelope.destination, audio.sfxBus);
+        }
+        assert.equal(audio.step, step);
+        assert.equal(audio.timer, timer);
+        assert.equal(audio.track, track);
+        assert.equal(world.timers.size, 1);
+        assert.deepEqual(
+          audio.voices.filter((voice) => voice.channel === "bgm"),
+          bgm,
+        );
+        audio.stopVoices("sfx");
+      }
+      if (chordIndex < track.chords.length - 1)
+        world.advance((track.meter * 60000) / track.bpm + 0.001);
+    }
+  }
+});
+
+test("BGM-off effects use the selected track and retain the last sounding chord", async (t) => {
+  const world = audioWorld(t);
+  const audio = new Soundscape();
+  audio.configure({ ...settings, bgmEnabled: false });
+  await audio.unlock();
+  for (const track of MUSIC_TRACKS) {
+    audio.setBoard(boardForTrack(track));
+    const step = audio.step;
+    audio.effect("remove");
+    const first = audio.voices.find((voice) => voice.channel === "sfx");
+    const midi = Math.round(
+      69 + 12 * Math.log2(first.oscillator.frequency.value / 440),
+    );
+    assert.ok(track.chords[0].some((tone) => (midi - tone) % 12 === 0));
+    assert.equal(audio.step, step);
+    assert.equal(world.timers.size, 0);
+    audio.stopVoices("sfx");
+    audio.configure(settings);
+    world.advance((track.meter * 60000) / track.bpm + 0.001);
+    audio.configure({ ...settings, bgmEnabled: false });
+    world.advance(101);
+    const pausedStep = audio.step;
+    for (const kind of ["remove", "blocked", "hint", "complete"]) {
+      audio.effect(kind);
+      for (const { oscillator } of audio.voices.filter(
+        (voice) => voice.channel === "sfx",
+      )) {
+        const midi = Math.round(
+          69 + 12 * Math.log2(oscillator.frequency.value / 440),
+        );
+        assert.ok(track.chords[1].some((tone) => (midi - tone) % 12 === 0));
+      }
+      assert.equal(audio.step, pausedStep);
+      assert.equal(world.timers.size, 0);
+      audio.stopVoices("sfx");
+    }
+  }
+});
+
+test("rapid taps stay bounded and leave room for other feedback without stopping BGM", async (t) => {
+  const world = audioWorld(t);
+  const audio = new Soundscape();
+  audio.configure(settings);
+  await audio.unlock();
+  const bgm = audio.voices.filter((voice) => voice.channel === "bgm");
+  const timer = audio.timer;
+  const step = audio.step;
+  for (let i = 0; i < 500; i++) audio.effect("remove");
+  assert.equal(
+    audio.voices.filter((voice) => voice.channel === "sfx").length,
+    4,
+  );
+  audio.effect("complete");
+  assert.equal(
+    audio.voices.filter((voice) => voice.channel === "sfx").length,
+    8,
+  );
+  const allocated = audio.context.oscillators.length;
+  for (let i = 0; i < 500; i++) audio.effect("complete");
+  assert.equal(audio.context.oscillators.length, allocated);
+  assert.equal(audio.step, step);
+  assert.equal(audio.timer, timer);
+  assert.deepEqual(
+    audio.voices.filter((voice) => voice.channel === "bgm"),
+    bgm,
+  );
+  world.advance(1800);
+  assert.equal(
+    audio.voices.filter((voice) => voice.channel === "sfx").length,
+    0,
+  );
+  audio.effect("blocked");
+  assert.equal(
+    audio.voices.filter((voice) => voice.channel === "sfx").length,
+    1,
+  );
+  await world.visibility(true);
+  assert.equal(audio.voices.length, 0);
+  assert.ok(audio.context.oscillators.every((node) => node.disconnected));
 });
 
 test("configuration and board selection do not create audio before a user unlock", async (t) => {
@@ -534,12 +692,19 @@ test("audio failures stay contained, clean partial nodes, and permit retry", asy
 });
 
 test("voice count remains bounded even when ended events are not delivered", async (t) => {
-  audioWorld(t);
+  const world = audioWorld(t);
   const audio = new Soundscape();
   audio.configure({ ...settings, bgmEnabled: false });
   await audio.unlock();
   for (let i = 0; i < 500; i++) audio.effect("complete");
-  assert.equal(audio.voices.length, 96);
+  assert.equal(audio.voices.length, 8);
+  const expired = [...audio.voices];
+  for (const voice of expired) voice.oscillator.onended = null;
+  world.advance(2000);
+  audio.effect("blocked");
+  assert.equal(audio.voices.length, 1);
+  assert.ok(expired.every((voice) => voice.oscillator.disconnected));
+  assert.ok(expired.every((voice) => voice.envelope.disconnected));
   audio.configure({ ...settings, bgmEnabled: false, sfxEnabled: false });
   assert.equal(audio.voices.length, 0);
 });
