@@ -1,12 +1,13 @@
 /** Arrow Journey rules and deterministic generation. No browser or storage dependencies. */
 export const RULES_VERSION = '1.0.0';
-export const GENERATOR_VERSION = '4.1.0';
-export const DIFFICULTY_PROFILE_VERSION = '3.0.0';
+export const GENERATOR_VERSION = '5.0.0';
+export const DIFFICULTY_PROFILE_VERSION = '4.0.0';
 
 const MAX_DIMENSION = 64;
 const MAX_LENGTH = 30;
-const MAX_BOARD_ATTEMPTS = 16;
-const BOARD_SIZES = Object.freeze([20, 24, 28, 32]);
+const MAX_BOARD_ATTEMPTS = 32;
+const BOARD_SIZES = Object.freeze([28, 32, 36, 40]);
+const SUPPORTED_BOARD_SIZES = Object.freeze([20, 24, ...BOARD_SIZES]);
 export const BOARD_SHAPES = Object.freeze([
   { id: 'square', label: '正方形' }, { id: 'circle', label: '円' }, { id: 'diamond', label: 'ひし形' },
   { id: 'cross', label: '十字' }, { id: 'heart', label: 'ハート' }, { id: 'ring', label: 'ドーナツ' },
@@ -17,7 +18,7 @@ export const DIFFICULTIES = Object.freeze(Object.fromEntries([
   ['easy', { name: 'Easy', width: 20, height: 20, roots: 11, depthBias: -0.05, mixPasses: 8, minDepthRatio: 0.10, minInitial: 8, maxInitial: 14, minNonRectangularRatio: 0.55, minInterpenetrationRatio: 0.30, lengthBands: [[5, 10, 0.45], [11, 18, 0.45], [19, 30, 0.10]] }],
   ['normal', { name: 'Normal', width: 24, height: 24, roots: 7, depthBias: 0.4, mixPasses: 12, minDepthRatio: 0.20, minInitial: 5, maxInitial: 8, minNonRectangularRatio: 0.60, minInterpenetrationRatio: 0.45, lengthBands: [[6, 12, 0.22], [13, 22, 0.50], [23, 30, 0.28]] }],
   ['hard', { name: 'Hard', width: 28, height: 28, roots: 4, depthBias: 1.2, mixPasses: 16, minDepthRatio: 0.28, minInitial: 3, maxInitial: 5, minNonRectangularRatio: 0.60, minInterpenetrationRatio: 0.50, lengthBands: [[6, 12, 0.12], [13, 22, 0.38], [23, 30, 0.50]] }],
-  ['expert', { name: 'Expert', width: 32, height: 32, roots: 2, depthBias: 3.2, mixPasses: 20, minDepthRatio: 0.40, minInitial: 1, maxInitial: 3, minNonRectangularRatio: 0.60, minInterpenetrationRatio: 0.50, lengthBands: [[6, 12, 0.08], [13, 22, 0.27], [23, 30, 0.65]] }],
+  ['expert', { name: 'Expert', width: 32, height: 32, roots: 2, depthBias: 3.2, mixPasses: 20, minDepthRatio: 0.40, minInitial: 1, maxInitial: 3, minNonRectangularRatio: 0.60, minInterpenetrationRatio: 0.50, shortFragmentPenalty: 8, maxGreedyUnlocks: 4, lengthBands: [[6, 12, 0.08], [13, 22, 0.27], [23, 30, 0.65]] }],
 ].map(([key, value]) => [key, Object.freeze({ ...value, density: 1, minDensity: 1, minLength: 2, maxLength: MAX_LENGTH,
   sizes: BOARD_SIZES,
   lengthBands: Object.freeze(value.lengthBands.map(Object.freeze)) })])));
@@ -147,6 +148,45 @@ function topologicalRemoval(board, graph) {
     }
   }
   return { order, choices, depth: Math.max(...depths.values()), solvable: order.length === board.arrows.length };
+}
+
+/** One reproducible legal policy, not an exhaustive bound over every legal order. */
+function greedyChoiceMetrics(board, graph) {
+  const pending = new Map([...graph.blockers].map(([id, ids]) => [id, ids.size]));
+  const lengths = new Map(board.arrows.map((arrow) => [arrow.id, arrow.cells.length]));
+  const ready = board.arrows.filter((arrow) => pending.get(arrow.id) === 0).map((arrow) => arrow.id);
+  const choices = [], unlocks = [], order = [];
+  while (ready.length) {
+    let selected = 0, mostUnlocks = -1;
+    for (let index = 0; index < ready.length; index += 1) {
+      const id = ready[index];
+      const immediate = graph.dependents.get(id).filter((other) => pending.get(other) === 1).length;
+      if (immediate > mostUnlocks || (immediate === mostUnlocks && lengths.get(id) > lengths.get(ready[selected]))) {
+        selected = index; mostUnlocks = immediate;
+      }
+    }
+    choices.push(ready.length);
+    const [id] = ready.splice(selected, 1);
+    order.push(id);
+    let unlocked = 0;
+    for (const other of graph.dependents.get(id)) {
+      pending.set(other, pending.get(other) - 1);
+      if (pending.get(other) === 0) { ready.push(other); unlocked += 1; }
+    }
+    unlocks.push(unlocked);
+  }
+  const mean = (values) => values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+  const terminalStart = choices.findIndex((value, index) => value === board.arrows.length - index);
+  return {
+    greedyPolicy: 'max-immediate-unlocks-longest-first',
+    greedyRemovalOrder: order,
+    greedyChoicesOverTime: choices, greedyUnlocksOverTime: unlocks,
+    greedyMeanChoices: mean(choices), greedyMaxUnlocks: Math.max(0, ...unlocks),
+    greedyLargeChoiceRatio: choices.filter((value) => value >= 5).length / Math.max(1, choices.length),
+    greedyEarlyMeanChoices: mean(choices.slice(0, Math.ceil(board.arrows.length * 0.8))),
+    greedyFinalQuarterMeanChoices: mean(choices.slice(Math.floor(board.arrows.length * 0.75))),
+    greedyTerminalFreeRatio: terminalStart < 0 ? 0 : (board.arrows.length - terminalStart) / board.arrows.length,
+  };
 }
 
 /** Validates geometry and rejects dependency cycles as unplayable data. */
@@ -282,6 +322,7 @@ export function solveBoard(board) {
       dependencyEdges: [...graph.blockers.values()].reduce((sum, ids) => sum + ids.size, 0),
       dependencyDepth: result.depth, dependencyDepthRatio: result.depth / lengths.length, choicesOverTime: result.choices,
       meanChoices: result.choices.reduce((sum, value) => sum + value, 0) / Math.max(1, result.choices.length),
+      ...greedyChoiceMetrics(board, graph),
       dagSolvable: result.solvable, greedySolvable: independent.solvable,
       ...geometryMetrics(board, structure.occupancy),
     },
@@ -481,7 +522,12 @@ function generateCandidate(profile, mask, random, work) {
         if (arrows.length < 2 && length !== targetLength) continue;
         const isRoot = dependencyDepth === 0;
         const rootPreference = roots < profile.roots ? (isRoot ? 100000 : 0) : (isRoot ? -100000 : 0);
-        const score = rootPreference - Math.abs(length - targetLength) + dependencyDepth * profile.depthBias + random() * 0.4;
+        const before = step === 1 ? index - length + 1 - starts[index] : ends[index] - index - length + 1;
+        const after = step === 1 ? ends[index] - index : index - starts[index];
+        // Avoid manufacturing tiny leftovers; retain the requested long, winding pieces.
+        const shortFragments = Number(before > 0 && before < 6) + Number(after > 0 && after < 6);
+        const score = rootPreference - Math.abs(length - targetLength) + dependencyDepth * profile.depthBias
+          - shortFragments * (profile.shortFragmentPenalty ?? 0) + random() * 0.4;
         if (score > bestScore) { best = { index, step, length, dependencyDepth, isRoot }; bestScore = score; }
       }
     };
@@ -524,6 +570,12 @@ function generateCandidate(profile, mask, random, work) {
   return { width, height, shape: profile.shape, mask: mask.cells.map((cell) => [cell % width, Math.floor(cell / width)]), arrows };
 }
 
+function chooseBoardShape(seed) {
+  const value = randomFromSeed(`${GENERATOR_VERSION}|shape|${seed}`)();
+  // Square 80%; the other five silhouettes share the remaining 20% equally.
+  return value < 0.8 ? 'square' : BOARD_SHAPES[1 + Math.floor((value - 0.8) / 0.04)].id;
+}
+
 /** Size and shape each use a difficulty-independent seed stream; overrides support previews/tests. */
 export function generateBoard(difficulty = 'easy', seed = 'arrow-journey', options = {}) {
   if (!Object.hasOwn(DIFFICULTIES, difficulty)) throw new RangeError(`Unknown difficulty: ${String(difficulty)}`);
@@ -535,9 +587,9 @@ export function generateBoard(difficulty = 'easy', seed = 'arrow-journey', optio
   if (!options || typeof options !== 'object' || Array.isArray(options)) throw new TypeError('Generation options must be an object.');
   const size = options.size === undefined
     ? BOARD_SIZES[Math.floor(randomFromSeed(`${GENERATOR_VERSION}|size|${seed}`)() * BOARD_SIZES.length)] : options.size;
-  if (!BOARD_SIZES.includes(size)) throw new RangeError('Board size must be 20, 24, 28 or 32.');
+  if (!SUPPORTED_BOARD_SIZES.includes(size)) throw new RangeError('Board size must be 20, 24, 28, 32, 36 or 40.');
   const shape = options.shape === undefined
-    ? BOARD_SHAPES[Math.floor(randomFromSeed(`${GENERATOR_VERSION}|shape|${seed}`)() * BOARD_SHAPES.length)].id : options.shape;
+    ? chooseBoardShape(seed) : options.shape;
   if (!BOARD_SHAPES.some((entry) => entry.id === shape)) throw new RangeError('Unknown board shape.');
   const profile = { ...DIFFICULTIES[difficulty], width: size, height: size, shape };
   const mask = playableMask(size, shape);
@@ -555,7 +607,8 @@ export function generateBoard(difficulty = 'easy', seed = 'arrow-journey', optio
         || solution.metrics.dependencyDepth < Math.ceil(profile.minDepthRatio * solution.metrics.arrowCount)
         || solution.metrics.initialRemovable < profile.minInitial || solution.metrics.initialRemovable > profile.maxInitial
         || solution.metrics.nonRectangularRatio < profile.minNonRectangularRatio
-        || solution.metrics.boundingBoxInterpenetrationRatio < profile.minInterpenetrationRatio) continue;
+        || solution.metrics.boundingBoxInterpenetrationRatio < profile.minInterpenetrationRatio
+        || solution.metrics.greedyMaxUnlocks > (profile.maxGreedyUnlocks ?? Infinity)) continue;
     return {
       ...board, difficulty, seed, generatorVersion: GENERATOR_VERSION, rulesVersion: RULES_VERSION,
       difficultyProfileVersion: DIFFICULTY_PROFILE_VERSION, fingerprint: boardFingerprint(board),

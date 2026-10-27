@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
+import { readFile } from 'node:fs/promises';
 import {
   DIFFICULTIES, BOARD_SHAPES, GENERATOR_VERSION, RULES_VERSION, DIFFICULTY_PROFILE_VERSION,
   generateBoard, validateBoard, canRemove, getRemovable, solveBoard, boardFingerprint, sampleArrow,
@@ -8,6 +9,7 @@ import {
 
 const boardOf = (arrows, width = 6, height = 6) => ({ width, height, arrows });
 const arrow = (id, cells) => ({ id, cells });
+const supportedSizes = [20, 24, 28, 32, 36, 40];
 
 // Deliberately independent of engine indexing, direction helpers and solver code.
 function independentBlockers(board, remaining, targetId) {
@@ -210,6 +212,61 @@ test('metrics distinguish paths winding through one another from rectangular til
   assert.equal(metrics.dependencyDepth, 2);
 });
 
+test('greedy metrics observe a known three-arrow unlock burst and retain FIFO metrics', () => {
+  const board = boardOf([
+    arrow('hub', Array.from({ length: 6 }, (_, y) => [5, y])),
+    ...[0, 2, 4].map((y) => arrow('child-' + y, [[0, y], [1, y]])),
+  ]);
+  const { metrics } = solveBoard(board);
+  assert.equal(metrics.greedyPolicy, 'max-immediate-unlocks-longest-first');
+  assert.deepEqual(metrics.greedyRemovalOrder, ['hub', 'child-0', 'child-2', 'child-4']);
+  assert.deepEqual(metrics.greedyChoicesOverTime, [1, 3, 2, 1]);
+  assert.deepEqual(metrics.greedyUnlocksOverTime, [3, 0, 0, 0]);
+  assert.equal(metrics.greedyMeanChoices, 1.75);
+  assert.equal(metrics.greedyMaxUnlocks, 3);
+  assert.equal(metrics.greedyLargeChoiceRatio, 0);
+  assert.equal(metrics.greedyEarlyMeanChoices, 1.75);
+  assert.equal(metrics.greedyFinalQuarterMeanChoices, 1);
+  assert.equal(metrics.greedyTerminalFreeRatio, 0.75);
+  assert.deepEqual(metrics.choicesOverTime, [1, 3, 2, 1]);
+  assert.equal(metrics.meanChoices, 1.75);
+});
+
+test('greedy ties prefer longer arrows and its complete order is independently legal', () => {
+  const board = boardOf([
+    arrow('short', [[6, 4], [7, 4]]),
+    arrow('long', [[3, 1], [3, 0], [4, 0], [5, 0], [5, 1], [6, 1], [6, 0]]),
+    arrow('upper', [[0, 1], [1, 1]]), arrow('lower', [[0, 4], [1, 4]]),
+  ], 8, 6);
+  const { metrics } = solveBoard(board);
+  assert.equal(metrics.greedyRemovalOrder[0], 'long');
+  assert.deepEqual(metrics.greedyUnlocksOverTime, [1, 1, 0, 0]);
+  const remaining = board.arrows.map((item) => item.id);
+  for (const id of metrics.greedyRemovalOrder) {
+    assert.deepEqual(independentBlockers(board, remaining, id), []);
+    remaining.splice(remaining.indexOf(id), 1);
+  }
+  assert.equal(remaining.length, 0);
+});
+
+test('literal v4.1 saved mask and paths keep their original fingerprint without regeneration', async () => {
+  const saved = JSON.parse(await readFile(new URL('./engine-v4.1.fixture.json', import.meta.url), 'utf8'));
+  const exactSave = JSON.stringify(saved);
+  assert.equal(saved.generatorVersion, '4.1.0');
+  assert.equal(saved.fingerprint, 'aj1-f14fa2f2794ce7adccb3733144b0366e');
+  assert.deepEqual(validateBoard(saved), { valid: true, errors: [] });
+  const solution = solveBoard(saved);
+  assert.equal(solution.solvable, true);
+  assert.equal(boardFingerprint(saved), saved.fingerprint);
+  const remaining = saved.arrows.map((item) => item.id);
+  for (const id of solution.order) {
+    assert.deepEqual(independentBlockers(saved, remaining, id), []);
+    remaining.splice(remaining.indexOf(id), 1);
+  }
+  assert.equal(remaining.length, 0);
+  assert.equal(JSON.stringify(saved), exactSave);
+});
+
 test('legacy saved cell paths retain their geometry and remain playable after a generator update', () => {
   const legacy = { ...boardOf([arrow('a', [[0, 0], [1, 0]]), arrow('b', [[3, 0], [4, 0]])]),
     difficulty: 'easy', seed: 'legacy', rulesVersion: '1.0.0', generatorVersion: '1.0.0', difficultyProfileVersion: '1.0.0' };
@@ -287,13 +344,12 @@ test('v4 saved masked geometry keeps its original paths, mask and fingerprint wi
 
 test('every difficulty shares all sizes and size selection depends only on the seed', () => {
   const sizes = new Set();
-  const shapes = new Set();
   assert.deepEqual(BOARD_SHAPES.map((shape) => shape.id), ['square', 'circle', 'diamond', 'cross', 'heart', 'ring']);
   assert.equal(BOARD_SHAPES.find((shape) => shape.id === 'ring').label, 'ドーナツ');
   assert.ok(Object.isFrozen(BOARD_SHAPES));
   for (const shape of BOARD_SHAPES) { assert.ok(Object.isFrozen(shape)); assert.equal(typeof shape.label, 'string'); }
   for (const profile of Object.values(DIFFICULTIES)) {
-    assert.deepEqual(profile.sizes, [20, 24, 28, 32]);
+    assert.deepEqual(profile.sizes, [28, 32, 36, 40]);
     assert.ok(Object.isFrozen(profile)); assert.ok(Object.isFrozen(profile.sizes));
   }
   for (let seed = 0; seed < 24; seed += 1) {
@@ -301,7 +357,6 @@ test('every difficulty shares all sizes and size selection depends only on the s
     const size = boards[0].width;
     const shape = boards[0].shape;
     sizes.add(size);
-    shapes.add(shape);
     for (const board of boards) {
       assert.equal(board.width, size); assert.equal(board.height, size);
       assert.equal(board.shape, shape);
@@ -309,19 +364,63 @@ test('every difficulty shares all sizes and size selection depends only on the s
       assert.deepEqual(board, generateBoard(board.difficulty, board.seed, { shape }));
       assert.deepEqual(board, generateBoard(board.difficulty, board.seed, { size }));
     }
-    for (const otherSize of [20, 24, 28, 32]) assert.equal(generateBoard('easy', boards[0].seed, { size: otherSize }).shape, shape);
+    for (const otherSize of supportedSizes) assert.equal(generateBoard('easy', boards[0].seed, { size: otherSize }).shape, shape);
     for (const otherShape of BOARD_SHAPES) assert.equal(generateBoard('easy', boards[0].seed, { shape: otherShape.id }).width, size);
   }
-  assert.deepEqual([...sizes].sort((a, b) => a - b), [20, 24, 28, 32]);
-  assert.deepEqual([...shapes].sort(), BOARD_SHAPES.map((shape) => shape.id).sort());
+  assert.deepEqual([...sizes].sort((a, b) => a - b), [28, 32, 36, 40]);
   for (const size of [0, 19, 21, 64, '20', null, NaN, Infinity]) assert.throws(() => generateBoard('easy', 'invalid', { size }), RangeError);
   for (const options of [null, [], 20]) assert.throws(() => generateBoard('easy', 'invalid', options), TypeError);
   for (const shape of ['annulus', '__proto__', {}, 1, null]) assert.throws(() => generateBoard('easy', 'invalid', { shape }), RangeError);
 });
 
+test('default shape selection favors squares while occasionally retaining every other silhouette', () => {
+  const counts = new Map(BOARD_SHAPES.map((shape) => [shape.id, 0]));
+  for (let seed = 0; seed < 512; seed += 1) {
+    const board = generateBoard('easy', 'shape-distribution-' + seed);
+    counts.set(board.shape, counts.get(board.shape) + 1);
+  }
+  const squareRatio = counts.get('square') / 512;
+  assert.ok(squareRatio >= 0.75 && squareRatio <= 0.85, JSON.stringify([...counts]));
+  for (const { id } of BOARD_SHAPES.filter((shape) => shape.id !== 'square')) {
+    assert.ok(counts.get(id) >= 5 && counts.get(id) < 51, JSON.stringify([...counts]));
+  }
+});
+
+test('weighted default Expert generation stays bounded across 512 seeds and prior failing large squares', (context) => {
+  let maximumAttempts = 0, maximumMs = 0;
+  const seeds = [...Array.from({ length: 512 }, (_, index) => 'weighted-expert-' + index),
+    'balance-random-0', 'balance-random-85', 'balance-random-144'];
+  for (const seed of seeds) {
+    const started = performance.now();
+    const board = generateBoard('expert', seed);
+    maximumMs = Math.max(maximumMs, performance.now() - started);
+    maximumAttempts = Math.max(maximumAttempts, board.generationMetrics.boardAttempts);
+    assert.ok(board.generationMetrics.boardAttempts <= 32, seed);
+    assert.deepEqual(validateBoard(board), { valid: true, errors: [] });
+    const solution = solveBoard(board);
+    assert.equal(solution.solvable, true);
+    assert.ok(solution.metrics.greedyMaxUnlocks <= 4, seed);
+    if (seed.startsWith('balance-random-')) assert.deepEqual(board, generateBoard('expert', seed));
+  }
+  context.diagnostic(JSON.stringify({ weightedExpertBoards: seeds.length, maximumAttempts, maximumMs }));
+});
+
+test('additional bounded attempts retain Expert quality and exactly reproduce a previously exhausted square', () => {
+  const board = generateBoard('expert', 'size-selection-11');
+  assert.equal(board.width, 40); assert.equal(board.shape, 'square');
+  assert.equal(board.generationMetrics.boardAttempts, 20);
+  assert.equal(board.fingerprint, 'aj1-7491407d2a981fae56fab5ec08f3ea3f');
+  const solution = solveBoard(board);
+  assert.equal(solution.solvable, true);
+  assert.equal(solution.metrics.greedyMaxUnlocks, 4);
+  assert.ok(solution.metrics.dependencyDepthRatio >= DIFFICULTIES.expert.minDepthRatio);
+  assert.ok(solution.metrics.initialRemovable >= 1 && solution.metrics.initialRemovable <= 3);
+  assert.deepEqual(board, generateBoard('expert', 'size-selection-11'));
+});
+
 test('100 seeds at each size and difficulty fill the grid, independently solve and separate choice pressure', (context) => {
   const allFingerprints = new Set();
-  for (const size of [20, 24, 28, 32]) {
+  for (const size of supportedSizes) {
     const summaries = [];
     for (const [difficulty, profile] of Object.entries(DIFFICULTIES)) {
       const started = performance.now();
@@ -340,10 +439,10 @@ test('100 seeds at each size and difficulty fill the grid, independently solve a
         assert.equal(board.difficultyProfileVersion, DIFFICULTY_PROFILE_VERSION);
         assert.equal(board.fingerprint, boardFingerprint(board));
         assert.equal(allFingerprints.has(board.fingerprint), false); allFingerprints.add(board.fingerprint);
-        assert.ok(board.generationMetrics.boardAttempts <= 16);
+        assert.ok(board.generationMetrics.boardAttempts <= 32);
         const area = size * size;
-        assert.ok(board.generationMetrics.backbiteMoves <= 16 * area * profile.mixPasses);
-        assert.ok(board.generationMetrics.cutCandidates <= 16 * (area / 2) * 2 * (board.width + board.height) * 29);
+        assert.ok(board.generationMetrics.backbiteMoves <= 32 * area * profile.mixPasses);
+        assert.ok(board.generationMetrics.cutCandidates <= 32 * (area / 2) * 2 * (board.width + board.height) * 29);
         const occupied = new Set(board.arrows.flatMap((item) => item.cells.map(([x, y]) => x + ',' + y)));
         assert.equal(occupied.size, area);
         assert.equal(board.arrows.reduce((sum, item) => sum + item.cells.length, 0), area);
@@ -355,21 +454,28 @@ test('100 seeds at each size and difficulty fill the grid, independently solve a
         assert.ok(metrics.dependencyDepth >= Math.ceil(profile.minDepthRatio * metrics.arrowCount));
         assert.ok(metrics.nonRectangularRatio >= profile.minNonRectangularRatio);
         assert.ok(metrics.boundingBoxInterpenetrationRatio >= profile.minInterpenetrationRatio);
+        if (difficulty === 'expert') {
+          assert.ok(metrics.greedyMaxUnlocks <= profile.maxGreedyUnlocks);
+        }
         assert.ok(metrics.averageNeighborDiversity >= 4);
         assert.equal(result.order.length, board.arrows.length);
-        const remaining = board.arrows.map((item) => item.id);
+        const ids = board.arrows.map((item) => item.id);
+        const remaining = new Set(ids);
+        // Numeric rays are static: removing arrows only removes existing blockers.
+        // Cache this independent relation once, as in the shaped-board acceptance below.
+        const blockers = new Map(ids.map((id) => [id, independentBlockers(board, ids, id)]));
         for (const id of result.order) {
-          assert.deepEqual(independentBlockers(board, remaining, id), []);
-          remaining.splice(remaining.indexOf(id), 1);
+          assert.equal(blockers.get(id).some((other) => remaining.has(other)), false);
+          remaining.delete(id);
         }
-        assert.equal(remaining.length, 0);
+        assert.equal(remaining.size, 0);
         // A different legal branch is checked independently of the engine graph/order.
-        const alternative = board.arrows.map((item) => item.id);
-        while (alternative.length) {
-          const legal = alternative.filter((id) => independentBlockers(board, alternative, id).length === 0);
+        const alternative = new Set(ids);
+        while (alternative.size) {
+          const legal = [...alternative].filter((id) => !blockers.get(id).some((other) => alternative.has(other)));
           assert.ok(legal.length);
-          const chosen = legal[(seed + alternative.length) % legal.length];
-          alternative.splice(alternative.indexOf(chosen), 1);
+          const chosen = legal[(seed + alternative.size) % legal.length];
+          alternative.delete(chosen);
         }
         // Exact geometry/work counters reproduce, including after rejected attempts.
         if (seed === 0 || board.generationMetrics.boardAttempts >= 4) {
@@ -400,7 +506,7 @@ test('100 seeds at each size and difficulty fill the grid, independently solve a
 test('25 seeds per shape, size and difficulty cover connected masks and independently complete in two legal orders', (context) => {
   const fingerprints = new Set();
   for (const { id: shape } of BOARD_SHAPES) {
-    for (const size of [20, 24, 28, 32]) {
+    for (const size of supportedSizes) {
       const summaries = [];
       let expectedMask;
       for (const [difficulty, profile] of Object.entries(DIFFICULTIES)) {
@@ -415,8 +521,8 @@ test('25 seeds per shape, size and difficulty cover connected masks and independ
           maximumAttempts = Math.max(maximumAttempts, board.generationMetrics.boardAttempts);
           assert.equal(board.width, size); assert.equal(board.height, size); assert.equal(board.shape, shape);
           assert.deepEqual(validateBoard(board), { valid: true, errors: [] });
-          assert.equal(board.rulesVersion, '1.0.0'); assert.equal(board.generatorVersion, '4.1.0');
-          assert.equal(board.difficultyProfileVersion, '3.0.0');
+          assert.equal(board.rulesVersion, '1.0.0'); assert.equal(board.generatorVersion, '5.0.0');
+          assert.equal(board.difficultyProfileVersion, '4.0.0');
           assert.equal(board.fingerprint, boardFingerprint(board));
           assert.equal(fingerprints.has(board.fingerprint), false); fingerprints.add(board.fingerprint);
           // The silhouette is independent of difficulty, seed and generated path geometry.
@@ -460,8 +566,8 @@ test('25 seeds per shape, size and difficulty cover connected masks and independ
               const key = x + ',' + y;
               if (!mask.has(key) && !exterior.has(key)) hole.add(key);
             }
-            assert.equal(mask.size, { 20: 272, 24: 384, 28: 528, 32: 704 }[size]);
-            assert.equal(hole.size, { 20: 48, 24: 64, 28: 96, 32: 128 }[size]);
+            assert.equal(mask.size, { 20: 272, 24: 384, 28: 528, 32: 704, 36: 848, 40: 1056 }[size]);
+            assert.equal(hole.size, { 20: 48, 24: 64, 28: 96, 32: 128, 36: 176, 40: 208 }[size]);
             const center = [size / 2, size / 2], reached = new Set(), holeQueue = [center];
             assert.ok(hole.has(center.join(',')));
             for (let i = 0; i < holeQueue.length; i += 1) {
@@ -482,9 +588,12 @@ test('25 seeds per shape, size and difficulty cover connected masks and independ
           assert.ok(metrics.dependencyDepth >= Math.ceil(profile.minDepthRatio * metrics.arrowCount));
           assert.ok(metrics.nonRectangularRatio >= profile.minNonRectangularRatio);
           assert.ok(metrics.boundingBoxInterpenetrationRatio >= profile.minInterpenetrationRatio);
-          assert.ok(board.generationMetrics.boardAttempts >= 1 && board.generationMetrics.boardAttempts <= 16);
-          assert.ok(board.generationMetrics.backbiteMoves <= 16 * mask.size * profile.mixPasses);
-          assert.ok(board.generationMetrics.cutCandidates <= 16 * (mask.size / 2) * 2 * (size + size) * 29);
+        if (difficulty === 'expert') {
+          assert.ok(metrics.greedyMaxUnlocks <= profile.maxGreedyUnlocks);
+        }
+          assert.ok(board.generationMetrics.boardAttempts >= 1 && board.generationMetrics.boardAttempts <= 32);
+          assert.ok(board.generationMetrics.backbiteMoves <= 32 * mask.size * profile.mixPasses);
+          assert.ok(board.generationMetrics.cutCandidates <= 32 * (mask.size / 2) * 2 * (size + size) * 29);
           const ids = board.arrows.map((item) => item.id);
           // Numeric ray tests across the bounding box are independent of engine mask/index/graph code.
           const blockers = new Map(ids.map((id) => [id, independentBlockers(board, ids, id)]));
@@ -525,7 +634,7 @@ test('25 seeds per shape, size and difficulty cover connected masks and independ
       }
     }
   }
-  assert.equal(fingerprints.size, 2400);
+  assert.equal(fingerprints.size, 3600);
 });
 
 test('worker returns a board or an error with the original request ID', async () => {

@@ -3,7 +3,7 @@ import { getRemovable, canRemove, solveBoard } from "../../js/engine.js";
 import { trackForBoard, musicEvents } from "../../js/music.js";
 import { mkdir } from "node:fs/promises";
 const evidence =
-  "C:/Users/aqua_/Documents/Codex/2026-10-22/Arrow-Journey-0.5.0";
+  "C:/Users/aqua_/Documents/Codex/2026-10-27/Arrow-Journey-balance";
 async function readProfile(page) {
   return page.evaluate(
     () =>
@@ -459,7 +459,7 @@ test("UI, blocked tap, drag exclusion, hint persistence and new-game replacement
   await page.getByRole("button", { name: "ホーム", exact: true }).click();
   await start(page, "hard");
   p = await readProfile(page);
-  expect([20, 24, 28, 32]).toContain(p.activeGame.board.width);
+  expect([28, 32, 36, 40]).toContain(p.activeGame.board.width);
   expect(p.activeGame.playId).not.toBe(g.playId);
   expect(p.summaries[g.playId].misses).toBe(1);
   expect(errors).toEqual([]);
@@ -701,7 +701,7 @@ test("mobile 390/354px fits; offline shell, worker generation and resume work", 
   await page.reload();
   await start(page, "expert");
   const offlineGame = (await readProfile(page)).activeGame;
-  expect([20, 24, 28, 32]).toContain(offlineGame.board.width);
+  expect([28, 32, 36, 40]).toContain(offlineGame.board.width);
   await expect(page.locator(".play-meta")).toContainText(
     `${offlineGame.board.width} × ${offlineGame.board.height}`,
   );
