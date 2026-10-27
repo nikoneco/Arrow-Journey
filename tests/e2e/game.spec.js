@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { getRemovable, canRemove, solveBoard } from "../../js/engine.js";
 import { trackForBoard, musicEvents } from "../../js/music.js";
 import { mkdir } from "node:fs/promises";
+import { boardCoordinates } from "./board-coordinates.js";
 const evidence =
   "C:/Users/aqua_/Documents/Codex/2026-10-27/Arrow-Journey-balance";
 async function readProfile(page) {
@@ -72,11 +73,8 @@ test("six selectable shapes fill only playable cells and retain shape, dots and 
         { length: game.board.width * game.board.height },
         (_, i) => [i % game.board.width, Math.floor(i / game.board.width)],
       ).find(([x, y]) => !mask.has(`${x},${y}`));
-      const rect = await page.locator("#board svg").boundingBox();
-      await page.mouse.click(
-        rect.x + ((voidCell[0] + 0.5) * rect.width) / game.board.width,
-        rect.y + ((voidCell[1] + 0.5) * rect.height) / game.board.height,
-      );
+      const position = (await boardCoordinates(page))(voidCell);
+      await page.mouse.click(position.x, position.y);
       await expect(page.locator("#misses")).toHaveText("0");
       await expect(page.locator("#remaining")).toHaveText(
         String(game.remainingIds.length),
@@ -286,11 +284,8 @@ test("trusted mouse and touch holds show neutral guides across a ring hole, neve
         return false;
       });
       expect(target).toBeTruthy();
-      const rect = await page.locator("#board svg").boundingBox();
-      const point = ([x, y]) => ({
-        x: rect.x + ((x + 0.85) * rect.width) / game.board.width,
-        y: rect.y + ((y + 0.85) * rect.height) / game.board.height,
-      });
+      const coordinates = await boardCoordinates(page);
+      const point = (cell) => coordinates(cell, [0.85, 0.85]);
       const cdp = mobile ? await context.newCDPSession(page) : null;
       const down = async (point) =>
         mobile
@@ -428,10 +423,8 @@ test("UI, blocked tap, drag exclusion, hint persistence and new-game replacement
   const arrow = g.board.arrows.find((a) => a.id === blocked),
     cell = arrow.cells[Math.floor(arrow.cells.length / 2)],
     r = await page.locator("#board svg").boundingBox();
-  await page.mouse.click(
-    r.x + ((cell[0] + 0.5) * r.width) / g.board.width,
-    r.y + ((cell[1] + 0.5) * r.height) / g.board.height,
-  );
+  const position = (await boardCoordinates(page))(cell);
+  await page.mouse.click(position.x, position.y);
   await expect(page.locator("#misses")).toHaveText("1");
   const before = (await readProfile(page)).activeGame.remainingIds.length;
   await page.mouse.move(r.x + 30, r.y + 30);
@@ -664,8 +657,7 @@ test("the desktop cursor stays a pointer across arrow lines, cell corners and dr
     [0.08, 0.08],
     [0.92, 0.92],
   ]) {
-    const x = rect.x + ((cell[0] + dx) * rect.width) / game.board.width;
-    const y = rect.y + ((cell[1] + dy) * rect.height) / game.board.height;
+    const { x, y } = (await boardCoordinates(page))(cell, [dx, dy]);
     await page.mouse.move(x, y);
     expect(
       await page.evaluate(
@@ -781,21 +773,8 @@ test("whole-cell corners respond to mouse and touch, including after zoom, while
           a.cells.length >= 3 &&
           !canRemove(g.board, g.remainingIds, a.id).allowed,
       );
-      const rect = await page.locator("#board svg").boundingBox();
-      const tap = async (
-        cell,
-        offset = [0.92, 0.92],
-        zoom = 1,
-        panX = 0,
-        panY = 0,
-      ) => {
-        const x =
-          rect.x +
-          (((cell[0] + offset[0]) * zoom + panX) * rect.width) / g.board.width;
-        const y =
-          rect.y +
-          (((cell[1] + offset[1]) * zoom + panY) * rect.height) /
-            g.board.height;
+      const tap = async (cell, offset = [0.92, 0.92]) => {
+        const { x, y } = (await boardCoordinates(page))(cell, offset);
         if (mobile) await page.touchscreen.tap(x, y);
         else await page.mouse.click(x, y);
       };
@@ -848,7 +827,7 @@ test("whole-cell corners respond to mouse and touch, including after zoom, while
         )
         .flatMap((a) => a.cells)
         .find(([x, y]) => x >= 5 && x <= 14 && y >= 5 && y <= 14);
-      await tap(zoomedCell, [0.92, 0.92], zoom, panX, panY);
+      await tap(zoomedCell, [0.92, 0.92]);
       await expect(page.locator("#misses")).toHaveText(String(++misses));
       expect(errors).toEqual([]);
     } finally {
@@ -1001,10 +980,7 @@ test("rapid nearby touch taps suppress browser zoom while board pinch and contro
     const scene = page.locator("#board svg > g");
     const transform = await scene.getAttribute("transform");
     const scale = await page.evaluate(() => visualViewport.scale);
-    const point = ([x, y]) => ({
-      x: rect.x + ((x + 0.5) * rect.width) / game.board.width,
-      y: rect.y + ((y + 0.5) * rect.height) / game.board.height,
-    });
+    const point = await boardCoordinates(page);
     const free = game.board.arrows.filter((a) =>
       getRemovable(game.board, game.remainingIds).includes(a.id),
     );

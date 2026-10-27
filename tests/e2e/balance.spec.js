@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
+import { boardCoordinates } from "./board-coordinates.js";
 import {
   DIFFICULTIES,
   GENERATOR_VERSION,
@@ -93,10 +94,14 @@ for (const [label, shape, viewport, touch] of [
       expect(game.board.shape).toBe(shape);
       expect(game.board.generatorVersion).toBe(GENERATOR_VERSION);
       expect(solveBoard(game.board).solvable).toBe(true);
-      await expect(page.locator("#board svg")).toHaveAttribute(
-        "viewBox",
-        `0 0 ${largestSize} ${largestSize}`,
-      );
+      const visible = await page
+        .locator("#board svg")
+        .evaluate((svg) => ({
+          width: svg.viewBox.baseVal.width,
+          height: svg.viewBox.baseVal.height,
+        }));
+      expect(visible.width).toBeGreaterThanOrEqual(largestSize);
+      expect(visible.height).toBeGreaterThanOrEqual(largestSize);
       await expect(page.locator("#remaining")).toHaveText(
         String(game.board.arrows.length),
       );
@@ -110,11 +115,7 @@ for (const [label, shape, viewport, touch] of [
 
       const id = getRemovable(game.board, game.remainingIds)[0];
       const cell = game.board.arrows.find((arrow) => arrow.id === id).cells[0];
-      const rect = await page.locator("#board svg").boundingBox();
-      const point = {
-        x: rect.x + ((cell[0] + 0.5) * rect.width) / largestSize,
-        y: rect.y + ((cell[1] + 0.5) * rect.height) / largestSize,
-      };
+      const point = (await boardCoordinates(page))(cell);
       if (touch) await page.touchscreen.tap(point.x, point.y);
       else await page.mouse.click(point.x, point.y);
       await expect(page.locator("#remaining")).toHaveText(
@@ -194,12 +195,10 @@ test("a strict Expert board can finish its twentieth attempt under Chrome CPU th
     );
     expect(elapsedMs).toBeLessThan(12000);
     expect(errors).toEqual([]);
-    test
-      .info()
-      .annotations.push({
-        type: "Chrome CPU rate=6",
-        description: `start to rendered board: ${elapsedMs}ms; desktop emulation, not physical mobile proof`,
-      });
+    test.info().annotations.push({
+      type: "Chrome CPU rate=6",
+      description: `start to rendered board: ${elapsedMs}ms; desktop emulation, not physical mobile proof`,
+    });
   } finally {
     await context.close();
   }

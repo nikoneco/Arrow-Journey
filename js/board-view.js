@@ -230,6 +230,18 @@ export class BoardView {
     const pageWindow = this.pageDocument.defaultView || globalThis.window;
     if (pageWindow?.addEventListener)
       this.listen("blur", () => this.cancelGesture(), undefined, pageWindow);
+    const resize = () => {
+      if (this.updateViewport()) {
+        this.cancelGesture();
+        this.applyView();
+      }
+    };
+    if (typeof ResizeObserver === "function") {
+      this.resizeObserver = new ResizeObserver(resize);
+      this.resizeObserver.observe(this.svg);
+    } else if (pageWindow?.addEventListener) {
+      this.listen("resize", resize, undefined, pageWindow);
+    }
   }
 
   listen(type, handler, options, target = this.svg) {
@@ -279,7 +291,7 @@ export class BoardView {
     )
       this.cancelGesture();
     this.updateDots();
-    this.svg.setAttribute("viewBox", `0 0 ${board.width} ${board.height}`);
+    this.updateViewport();
     this.clipRect.setAttribute("width", board.width);
     this.clipRect.setAttribute("height", board.height);
     const focusedId = document.activeElement?.dataset?.arrowId;
@@ -539,12 +551,21 @@ export class BoardView {
       return { x: result.x, y: result.y };
     }
     const rect = this.svg.getBoundingClientRect();
-    const width = this.board?.width || 20,
-      height = this.board?.height || 20;
+    const viewport = this.viewport || {
+      x: 0,
+      y: 0,
+      width: this.board?.width || 20,
+      height: this.board?.height || 20,
+    };
+    const { width, height } = viewport;
     const scale = Math.min(rect.width / width, rect.height / height) || 1;
     return {
-      x: (clientX - rect.left - (rect.width - width * scale) / 2) / scale,
-      y: (clientY - rect.top - (rect.height - height * scale) / 2) / scale,
+      x:
+        viewport.x +
+        (clientX - rect.left - (rect.width - width * scale) / 2) / scale,
+      y:
+        viewport.y +
+        (clientY - rect.top - (rect.height - height * scale) / 2) / scale,
     };
   }
 
@@ -741,13 +762,19 @@ export class BoardView {
   arrowAt(clientX, clientY) {
     if (!this.board || this.destroyed) return null;
     const point = this.localPoint(clientX, clientY);
+    const viewport = this.viewport || {
+      x: 0,
+      y: 0,
+      width: this.board.width,
+      height: this.board.height,
+    };
     // A cell occupies [x,x+1) × [y,y+1), including the area off its line.
     // Check the visible viewport too: pointer capture can end just outside it.
     if (
-      point.x < 0 ||
-      point.x >= this.board.width ||
-      point.y < 0 ||
-      point.y >= this.board.height
+      point.x < viewport.x ||
+      point.x >= viewport.x + viewport.width ||
+      point.y < viewport.y ||
+      point.y >= viewport.y + viewport.height
     )
       return null;
     const x = Math.floor((point.x - this.panX) / this.zoomLevel);
@@ -790,15 +817,56 @@ export class BoardView {
     this.applyView();
   }
 
+  updateViewport() {
+    if (this.destroyed || !this.board) return false;
+    const { width, height } = this.board;
+    const rect = this.svg.getBoundingClientRect?.();
+    const aspect =
+      rect?.width > 0 && rect?.height > 0
+        ? rect.width / rect.height
+        : width / height;
+    const visibleWidth = Math.max(width, height * aspect);
+    const visibleHeight = Math.max(height, width / aspect);
+    const next = {
+      x: (width - visibleWidth) / 2,
+      y: (height - visibleHeight) / 2,
+      width: visibleWidth,
+      height: visibleHeight,
+    };
+    if (
+      this.viewport &&
+      Object.keys(next).every((key) => this.viewport[key] === next[key])
+    )
+      return false;
+    this.viewport = next;
+    this.svg.setAttribute(
+      "viewBox",
+      `${next.x} ${next.y} ${next.width} ${next.height}`,
+    );
+    return true;
+  }
+
   applyView() {
     if (!this.board) return;
-    this.panX = Math.min(
-      0,
-      Math.max(this.board.width * (1 - this.zoomLevel), this.panX),
-    );
-    this.panY = Math.min(
-      0,
-      Math.max(this.board.height * (1 - this.zoomLevel), this.panY),
+    const viewport = this.viewport || {
+      x: 0,
+      y: 0,
+      width: this.board.width,
+      height: this.board.height,
+    };
+    const clamp = (pan, extent, start, visible) =>
+      extent * this.zoomLevel <= visible
+        ? (extent * (1 - this.zoomLevel)) / 2
+        : Math.min(
+            start,
+            Math.max(start + visible - extent * this.zoomLevel, pan),
+          );
+    this.panX = clamp(this.panX, this.board.width, viewport.x, viewport.width);
+    this.panY = clamp(
+      this.panY,
+      this.board.height,
+      viewport.y,
+      viewport.height,
     );
     this.scene.setAttribute(
       "transform",
@@ -849,6 +917,7 @@ export class BoardView {
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.resizeObserver?.disconnect();
     this.cancelGesture();
     this.cancelAnimations();
     for (const [target, type, handler, options] of this.listeners)

@@ -146,7 +146,7 @@ function render() {
   if (!profile || profile.ownerKey !== owner) return;
   boardView?.destroy();
   boardView = null;
-  app.innerHTML = `<div class="shell">${header()}<aside id="app-notices" aria-label="通知"></aside><main id="main">${screen === "play" ? playMarkup() : homeMarkup()}</main>${footer()}</div><dialog id="dialog" class="dialog"></dialog>`;
+  app.innerHTML = `<div class="shell${screen === "play" ? " shell-play" : ""}">${header()}<aside id="app-notices" aria-label="通知"></aside><main id="main">${screen === "play" ? playMarkup() : homeMarkup()}</main>${footer()}</div><dialog id="dialog" class="dialog"></dialog>`;
   app.querySelectorAll("[data-action]").forEach((el) =>
     el.addEventListener("click", (e) => {
       e.preventDefault();
@@ -224,7 +224,7 @@ function playMarkup() {
     return homeMarkup();
   }
   const shape = BOARD_SHAPES.find((value) => value.id === g.board.shape);
-  return `<section class="play"><div class="play-meta"><span>${DIFFICULTIES[g.board.difficulty].name}<small>${g.board.width} × ${g.board.height}${shape ? " · " + shape.label : ""}</small></span><span class="saved-status">端末に保存</span></div><div class="play-info"><div><span>残り</span><strong id="remaining">${g.remainingIds.length}</strong><small> / ${g.board.arrows.length}</small></div><div class="miss-count" data-mistake-count ${settings().showMistakes ? "" : "hidden"}><span>ミス</span><strong id="misses">${g.misses}</strong></div></div><div class="progress"><span id="progress-bar" style="width:${100 * (1 - g.remainingIds.length / g.board.arrows.length)}%"></span></div><div class="game-frame${g.board.shape && g.board.shape !== "square" ? " shaped-frame" : ""}"><div id="board" class="board-viewport" aria-label="矢印パズル盤面"></div></div><div class="board-toolbar"><div class="zoom-controls"><button class="icon-button" data-action="zoomOut" aria-label="縮小">${icon("minus")}</button><button data-action="fit" aria-label="盤面を全体表示">${icon("fit")}<span>全体表示</span></button><button class="icon-button" data-action="zoomIn" aria-label="拡大">${icon("plus")}</button></div><button class="hint-button" data-action="hint">${icon("hint")}<span>ヒント<small id="hint-left">残り ${3 - g.hintsUsed} 回</small></span></button></div><p class="play-message" id="play-message" role="status"></p></section>`;
+  return `<section class="play"><div class="play-meta"><span>${DIFFICULTIES[g.board.difficulty].name}<small>${g.board.width} × ${g.board.height}${shape ? " · " + shape.label : ""}</small></span><span class="miss-count" data-mistake-count ${settings().showMistakes ? "" : "hidden"}>ミス <strong id="misses">${g.misses}</strong></span><span class="saved-status">端末に保存</span></div><div class="board-toolbar" role="group" aria-label="盤面の操作"><div class="play-count"><span>残り</span><div><strong id="remaining">${g.remainingIds.length}</strong><small> / ${g.board.arrows.length}</small></div></div><div class="zoom-controls"><button class="icon-button" data-action="zoomOut" aria-label="縮小">${icon("minus")}</button><button data-action="fit" aria-label="盤面を全体表示">${icon("fit")}<span class="fit-label">全体表示</span></button><button class="icon-button" data-action="zoomIn" aria-label="拡大">${icon("plus")}</button></div><button class="hint-button" data-action="hint" aria-label="ヒント 残り ${3 - g.hintsUsed} 回">${icon("hint")}<span>ヒント</span><small id="hint-left" class="sr-only">残り ${3 - g.hintsUsed} 回</small><span id="hint-count" aria-hidden="true">${3 - g.hintsUsed}</span></button></div><div class="progress"><span id="progress-bar" style="width:${100 * (1 - g.remainingIds.length / g.board.arrows.length)}%"></span></div><div class="game-frame${g.board.shape && g.board.shape !== "square" ? " shaped-frame" : ""}"><div id="board" class="board-viewport" aria-label="矢印パズル盤面"></div></div><p class="play-message" id="play-message" role="status"></p></section>`;
 }
 function updatePlay() {
   renderNotices();
@@ -242,12 +242,16 @@ function updatePlay() {
   set("remaining", g.remainingIds.length);
   set("misses", g.misses);
   set("hint-left", `残り ${3 - g.hintsUsed} 回`);
+  set("hint-count", 3 - g.hintsUsed);
   const bar = app.querySelector("#progress-bar");
   if (bar)
     bar.style.width =
       100 * (1 - g.remainingIds.length / g.board.arrows.length) + "%";
   const hint = app.querySelector('[data-action="hint"]');
-  if (hint) hint.disabled = busy || stale || (g.hintsUsed >= 3 && !g.hintId);
+  if (hint) {
+    hint.disabled = busy || stale || (g.hintsUsed >= 3 && !g.hintId);
+    hint.setAttribute("aria-label", `ヒント 残り ${3 - g.hintsUsed} 回`);
+  }
 }
 async function persist(next, target = owner, token = epoch) {
   if (
@@ -696,7 +700,7 @@ function openSettings() {
       )
       .join(
         "",
-      )}<div class="setting-row"><label for="show-mistakes"><strong>ミス数を表示</strong><small>プレイ中とクリア時</small></label><input class="switch" type="checkbox" id="show-mistakes" data-setting="showMistakes" ${s.showMistakes ? "checked" : ""}></div><div class="setting-row motion-row"><label for="reduced-motion"><strong>動きを減らす</strong><small>矢印の演出を短くします</small></label><input class="switch" type="checkbox" id="reduced-motion" data-setting="reducedMotion" ${s.reducedMotion ? "checked" : ""}></div></div><section class="account"><h3>成績と設定の同期</h3><p>${cloud?.configured ? (owner === "guest" ? "Googleアカウントで、成績と設定をほかの端末にも。" : "ログイン中 · 途中盤面はこの端末だけに保存します。") : "Google連携は準備中です。<br>成績・設定・途中盤面は、この端末に保存されています。"}</p><button class="secondary" id="login" ${!cloud?.configured ? "disabled" : ""}>${owner === "guest" ? "Googleでログイン" : "ログアウト"}</button>${cloud?.configured && owner !== "guest" ? '<button class="text-button" id="sync">今すぐ同期</button>' : ""}<p class="sync-status" id="sync-status"></p></section><p class="dialog-note">Arrow Journey 0.6.0<br></p>`,
+      )}<div class="setting-row"><label for="show-mistakes"><strong>ミス数を表示</strong><small>プレイ中とクリア時</small></label><input class="switch" type="checkbox" id="show-mistakes" data-setting="showMistakes" ${s.showMistakes ? "checked" : ""}></div><div class="setting-row motion-row"><label for="reduced-motion"><strong>動きを減らす</strong><small>矢印の演出を短くします</small></label><input class="switch" type="checkbox" id="reduced-motion" data-setting="reducedMotion" ${s.reducedMotion ? "checked" : ""}></div></div><section class="account"><h3>成績と設定の同期</h3><p>${cloud?.configured ? (owner === "guest" ? "Googleアカウントで、成績と設定をほかの端末にも。" : "ログイン中 · 途中盤面はこの端末だけに保存します。") : "Google連携は準備中です。<br>成績・設定・途中盤面は、この端末に保存されています。"}</p><button class="secondary" id="login" ${!cloud?.configured ? "disabled" : ""}>${owner === "guest" ? "Googleでログイン" : "ログアウト"}</button>${cloud?.configured && owner !== "guest" ? '<button class="text-button" id="sync">今すぐ同期</button>' : ""}<p class="sync-status" id="sync-status"></p></section><p class="dialog-note">Arrow Journey 0.6.1<br></p>`,
   );
   d.querySelectorAll("[data-setting]").forEach((input) =>
     input.addEventListener("change", async () => {

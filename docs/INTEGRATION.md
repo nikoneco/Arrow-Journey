@@ -80,6 +80,10 @@ Firestore Standardのdefaultデータベースを東京 `asia-northeast1` に本
 
 ## Pages公開と公開後の確認
 
+0.6.1 (2026-10-27): iPhone 15 Pro Maxを主用途とするため、残り本数・拡大縮小・全体表示・ヒントを上部の1段へまとめ、携帯の表示枠を縦長にした。盤面のマス数・形・生成条件は変更しない。SVGの表示範囲とタップ・パンの境界を表示枠に合わせ、ResizeObserverで回転と表示領域変化に追従する。safe-areaの上下左右余白を確保する。
+
+ローカルChrome24試験でPC、430×932のホーム画面相当、430×739のブラウザー内容領域相当、354/320px幅、932×430の横向きを確認した。上下の追加領域のタッチ・長押し・ドラッグ、均等なマスの形、拡大・ヒント・保存後の再開、旧機能の連続入力・ピンチ・オフライン・更新待機と保存保持を確認。59px/34pxのsafe-area余白はCSSで模擬したもので、iPhone 15 Pro Max実機の証拠ではない。公開ファイルの一致と公開画面は別途確認する。
+
 公開URLは https://nikoneco.github.io/Arrow-Journey/ 。2026-10-20、コミット `3b0630c` をmainへpushし、GitHub Actions run `39433490044` のbuild/deployがsuccessで完了した。公開資産13件（HTML、JS、Worker、CSS、アイコン、manifest、SW）はすべてHTTP200、ローカルビルドとのSHA256一致。manifestの解決後ID・start・scopeはこのURLで一致し、数独のIDや公開先は変更していない。
 
 公開URL専用に起動先を合わせたブラウザー試験5件が成功。ミス・ヒント・再開・新規置換、全消去と二重計上防止、390/354px、オフライン生成、旧タブ競合、除去中ホームを確認。Chromeでも公開Expertを開いて表示を確認した。実ブラウザーからGASへ送られた公開metadata読取のHTTP200、schema整合、配信版0.2.0を確認した。

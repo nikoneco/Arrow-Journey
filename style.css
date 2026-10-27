@@ -360,6 +360,8 @@ a {
 .play {
   padding-top: 14px;
   flex: 1;
+  display: flex;
+  flex-direction: column;
 }
 .play-meta {
   display: flex;
@@ -367,7 +369,8 @@ a {
   align-items: center;
   font-size: 16px;
   font-weight: 600;
-  margin: 0 1px 16px;
+  margin: 0 1px 8px;
+  gap: 6px;
 }
 .play-meta small {
   font-size: 11px;
@@ -390,33 +393,32 @@ a {
   background: var(--success);
   border-radius: 50%;
 }
-.play-info {
+.play-count {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 20px;
-  padding: 0 2px 9px;
-  font-size: 11px;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 1px;
+  font-size: 9px;
   color: var(--secondary);
 }
-.play-info strong {
-  font-size: 23px;
+.play-count strong {
+  font-size: 18px;
   font-weight: 500;
   color: var(--ink);
   font-variant-numeric: tabular-nums;
-  margin-left: 8px;
 }
 [data-mistake-count][hidden] {
   display: none;
 }
-.play-info small {
+.play-count small {
   font-size: 10px;
   color: var(--muted);
 }
 .progress {
   height: 2px;
   background: var(--track);
-  margin-bottom: 15px;
+  margin: 7px 0 8px;
+  flex-shrink: 0;
 }
 .progress span {
   display: block;
@@ -462,13 +464,13 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
-  margin-top: 16px;
+  gap: 8px;
+  flex-shrink: 0;
 }
 .zoom-controls {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 0;
 }
 .zoom-controls button {
   display: flex;
@@ -478,6 +480,7 @@ a {
   padding: 8px;
   font-size: 11px;
   min-height: 44px;
+  min-width: 44px;
 }
 .zoom-controls svg {
   width: 18px;
@@ -496,27 +499,28 @@ a {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 9px;
+  gap: 5px;
   border: 1px solid var(--accent-line);
   border-radius: 6px;
-  padding: 9px 18px;
+  padding: 8px;
   color: var(--accent);
   background: var(--accent-soft);
-  font-size: 13px;
+  font-size: 11px;
+  min-height: 44px;
+  min-width: 80px;
+  white-space: nowrap;
 }
-.hint-button small {
-  display: block;
-  font-size: 9px;
-  color: var(--secondary);
-  margin-top: 3px;
+#hint-count {
+  font-variant-numeric: tabular-nums;
 }
 .hint-button svg {
-  width: 22px;
-  height: 24px;
+  width: 18px;
+  height: 20px;
 }
 .play-message {
-  min-height: 24px;
-  margin: 16px 0 0;
+  min-height: 20px;
+  margin: 6px 0 0;
+  flex-shrink: 0;
   text-align: center;
   font-size: 11px;
   color: var(--message);
@@ -919,7 +923,7 @@ html.reduce-motion *:after {
     gap: 5px;
   }
   .hint-button {
-    padding: 9px 12px;
+    padding: 8px;
   }
   .board-toolbar {
     gap: 8px;
@@ -955,7 +959,57 @@ html.reduce-motion *:after {
     margin-bottom: 10px;
   }
   .board-toolbar {
-    margin-top: 10px;
+    margin-top: 0;
+  }
+}
+@media (max-width: 699px), (max-height: 600px) {
+  .shell-play {
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    margin: 0 auto;
+    border: 0;
+    border-radius: 0;
+    padding: max(10px, env(safe-area-inset-top))
+      max(12px, env(safe-area-inset-right))
+      max(10px, env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+  }
+  .shell-play #main,
+  .shell-play .play {
+    min-height: 0;
+  }
+  .shell-play .play {
+    padding-top: 6px;
+  }
+  .shell-play .play-meta {
+    font-size: 14px;
+    margin-bottom: 4px;
+  }
+  .shell-play .play-meta small {
+    margin-left: 7px;
+    font-size: 10px;
+  }
+  .shell-play .miss-count {
+    font-size: 10px;
+    font-weight: 400;
+  }
+  .shell-play .board-toolbar {
+    gap: 4px;
+  }
+  .shell-play .fit-label {
+    display: none;
+  }
+  .shell-play .game-frame {
+    flex: 1;
+    min-height: 160px;
+    display: flex;
+    padding: 6px;
+  }
+  .shell-play .board-viewport {
+    aspect-ratio: auto;
+    flex: 1;
+    min-height: 0;
   }
 }
 @media (prefers-reduced-motion: reduce) {

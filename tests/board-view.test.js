@@ -111,3 +111,67 @@ test("zoom and pan preserve square ownership and pointer capture cannot select o
   view.tapAt(1, 1);
   assert.deepEqual(taps, []);
 });
+
+test("a tall viewport accepts zoomed cells above and below the original square, but rejects captured pointers outside the frame", () => {
+  const { view, taps } = fixture();
+  view.viewport = { x: 0, y: -2.5, width: 4, height: 8 };
+  view.zoomLevel = 2;
+  view.panX = -1;
+  view.panY = -1.5;
+  view.tapAt(0.5, -0.5);
+  view.tapAt(0.5, 3.5);
+  assert.deepEqual(taps, ["tail", 7]);
+  taps.length = 0;
+  view.zoomLevel = 4;
+  view.panY = -5.5;
+  view.tapAt(0.5, -2.501);
+  view.tapAt(0.5, 5.5);
+  assert.deepEqual(taps, []);
+});
+
+test("viewport geometry keeps cells square and fallback input accounts for the extended vertical area", () => {
+  const { view } = fixture();
+  const attributes = new Map();
+  view.svg = {
+    getBoundingClientRect: () => ({
+      left: 10,
+      top: 20,
+      width: 200,
+      height: 400,
+    }),
+    getScreenCTM: () => null,
+    setAttribute: (key, value) => attributes.set(key, value),
+  };
+  assert.equal(view.updateViewport(), true);
+  assert.deepEqual(view.viewport, { x: 0, y: -2.5, width: 4, height: 8 });
+  assert.equal(attributes.get("viewBox"), "0 -2.5 4 8");
+  assert.equal(view.updateViewport(), false);
+  assert.deepEqual(BoardView.prototype.localPoint.call(view, 110, 220), {
+    x: 2,
+    y: 1.5,
+  });
+  assert.deepEqual(BoardView.prototype.localPoint.call(view, 110, 45), {
+    x: 2,
+    y: -2,
+  });
+});
+
+test("pan centers a zoomed board that fits vertically and clamps both edges when it exceeds the taller viewport", () => {
+  const { view } = fixture();
+  view.viewport = { x: 0, y: -2.5, width: 4, height: 8 };
+  view.scene = { setAttribute() {} };
+  view.onViewChange = () => {};
+  view.zoomLevel = 2;
+  view.panX = 100;
+  view.panY = -100;
+  view.applyView();
+  assert.equal(view.panX, 0);
+  assert.equal(view.panY, -1.5);
+  view.zoomLevel = 4;
+  view.panY = -100;
+  view.applyView();
+  assert.equal(view.panY, -6.5);
+  view.panY = 100;
+  view.applyView();
+  assert.equal(view.panY, -2.5);
+});
